@@ -1,5 +1,7 @@
 import readline from 'node:readline';
 import { width, truncate, pad, relTime, c } from './format.js';
+import { tailMessages } from './preview.js';
+import { sortSessions } from './scan.js';
 
 const ESC = '\x1b';
 const ALT_ON = ESC + '[?1049h';
@@ -56,18 +58,74 @@ function renderRow(s, cols, selected) {
   return `${marker} ${c.dim(time)}${c.dim(msgs)}${title} ${c.blue(cwd)}${c.magenta(tag)}`;
 }
 
+function absTime(ts) {
+  if (!ts) return '?';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '?';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /**
- * Interactive session picker. Returns the chosen session, or null if cancelled.
- * Falls back to null when stdout is not a TTY — the caller prints a plain list.
+ * The detail panel under the list: metadata the columns cannot fit, plus the
+ * tail of the conversation, which is usually what actually identifies a session
+ * when several share a title.
  */
-export function pick(sessions, { title = 'Claude sessions', subtitle = '', query: initialQuery = '' } = {}) {
+function renderPreview(s, cols, height, cache) {
+  const lines = [];
+  const w = cols - 2;
+  if (!s) return lines;
+
+  const meta = [
+    `${absTime(s.updatedAt)} · ${s.messages || 0} messages`,
+    s.gitBranch ? `· ${s.gitBranch}` : '',
+    s.archived ? '· archived' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  lines.push(c.bold(truncate(s.label, w)));
+  lines.push(c.dim(truncate(meta, w)));
+  lines.push(c.blue(truncate(homeShort(s.cwd), w)));
+  lines.push(
+    c.dim(truncate(s.id, w)) + ((s.tags || []).length ? ' ' + c.magenta(s.tags.map((t) => '#' + t).join(' ')) : '')
+  );
+  lines.push('');
+
+  const room = Math.max(0, height - lines.length);
+  if (room === 0) return lines.slice(0, height);
+
+  if (!s.resumable) {
+    lines.push(c.red('Transcript deleted by Claude Code cleanup — nothing left to show.'));
+  } else {
+    if (!cache.has(s.id)) cache.set(s.id, s.file ? tailMessages(s.file, { limit: room }) : []);
+    const msgs = cache.get(s.id).slice(-room);
+    if (!msgs.length) lines.push(c.dim('(no readable messages)'));
+    for (const m of msgs) {
+      const mark = m.role === 'user' ? c.cyan('›') : c.dim('‹');
+      lines.push(`${mark} ${truncate(m.text, w - 2)}`);
+    }
+  }
+  return lines.slice(0, height);
+}
+
+/**
+ * Interactive session picker. Resolves `{ session, action }`, or null if
+ * cancelled. Falls back to null when stdout is not a TTY — the caller prints a
+ * plain list instead.
+ */
+export function pick(sessions, { title = 'Claude sessions', subtitle = '', query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
     let query = initialQuery;
     let cursor = 0;
     let offset = 0;
-    let filtered = sessions;
+    let showPreview = previewOn;
+    let sort = sortMode;
+    let ordered = sortSessions(sessions, sort);
+    let filtered = ordered;
+    const previewCache = new Map();
 
     const out = process.stdout;
     readline.emitKeypressEvents(process.stdin);
@@ -84,31 +142,55 @@ export function pick(sessions, { title = 'Claude sessions', subtitle = '', query
     };
 
     const applyFilter = () => {
-      filtered = query ? sessions.filter((s) => fuzzy(searchable(s), query)) : sessions;
+      filtered = query ? ordered.filter((s) => fuzzy(searchable(s), query)) : ordered;
       if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
+    };
+
+    const reorder = (mode) => {
+      const keep = filtered[cursor];
+      sort = mode;
+      ordered = sortSessions(sessions, sort);
+      applyFilter();
+      const at = keep ? filtered.indexOf(keep) : -1;
+      cursor = at === -1 ? 0 : at;
+      offset = 0;
     };
 
     function draw() {
       const cols = out.columns || 80;
       const rows = out.rows || 24;
-      const listHeight = Math.max(3, rows - 6);
+      const previewHeight = showPreview ? Math.min(11, Math.max(5, Math.floor(rows * 0.4))) : 0;
+      const chrome = 6 + (showPreview ? previewHeight + 1 : 0);
+      const listHeight = Math.max(3, rows - chrome);
       if (cursor < offset) offset = cursor;
       if (cursor >= offset + listHeight) offset = cursor - listHeight + 1;
 
+      const rule = c.dim('─'.repeat(Math.min(cols - 1, 100)));
       const lines = [];
       lines.push(c.bold(title) + c.dim('  ' + subtitle));
       lines.push(c.cyan('search> ') + query + c.inverse(' '));
-      lines.push(c.dim('─'.repeat(Math.min(cols - 1, 100))));
+      lines.push(rule);
 
       const page = filtered.slice(offset, offset + listHeight);
       for (let i = 0; i < listHeight; i++) {
         const s = page[i];
         lines.push(s ? renderRow(s, cols, offset + i === cursor) : '');
       }
-      lines.push(c.dim('─'.repeat(Math.min(cols - 1, 100))));
+      lines.push(rule);
+
+      if (showPreview) {
+        const panel = renderPreview(filtered[cursor], cols, previewHeight, previewCache);
+        for (let i = 0; i < previewHeight; i++) lines.push(panel[i] ?? '');
+        lines.push(rule);
+      }
+
+      const help = showPreview
+        ? '↑↓ move · enter resume · tab hide · ^r remote · ^f fork · ^y cmd · esc quit'
+        : '↑↓ move · enter resume · tab preview · ^r remote · ^f fork · ^y cmd · esc quit';
       lines.push(
-        c.dim('↑↓/^n^p move · enter resume · ^u clear · esc quit') +
-          (filtered.length ? c.dim(`   [${cursor + 1}/${filtered.length}]`) : c.red('   no match'))
+        c.dim(truncate(help, Math.max(20, cols - 24))) +
+          c.dim(` sort:${sort}`) +
+          (filtered.length ? c.dim(`  [${cursor + 1}/${filtered.length}]`) : c.red('  no match'))
       );
       out.write(CLEAR + lines.join('\n'));
     }
@@ -119,12 +201,22 @@ export function pick(sessions, { title = 'Claude sessions', subtitle = '', query
         cleanup();
         resolve(value);
       };
-      if (key.name === 'escape' || (key.ctrl && key.name === 'c')) return done(null);
-      if (key.name === 'return' || key.name === 'enter') {
+      const act = (action) => {
         const chosen = filtered[cursor];
-        return chosen ? done(chosen) : undefined;
-      }
-      if (key.name === 'up' || (key.ctrl && key.name === 'p')) cursor = Math.max(0, cursor - 1);
+        return chosen ? done({ session: chosen, action }) : undefined;
+      };
+
+      if (key.name === 'escape' || (key.ctrl && key.name === 'c')) return done(null);
+      if (key.name === 'return' || key.name === 'enter') return act('resume');
+      if (key.ctrl && key.name === 'r') return act('remote');
+      if (key.ctrl && key.name === 'f') return act('fork');
+      if (key.ctrl && key.name === 'y') return act('print');
+
+      if (key.name === 'tab') showPreview = !showPreview;
+      else if (key.ctrl && key.name === 't') reorder('time');
+      else if (key.ctrl && key.name === 'o') reorder('title');
+      else if (key.ctrl && key.name === 'g') reorder('dir');
+      else if (key.name === 'up' || (key.ctrl && key.name === 'p')) cursor = Math.max(0, cursor - 1);
       else if (key.name === 'down' || (key.ctrl && key.name === 'n'))
         cursor = Math.min(filtered.length - 1, cursor + 1);
       else if (key.name === 'pageup') cursor = Math.max(0, cursor - 10);

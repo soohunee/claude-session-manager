@@ -32,7 +32,16 @@ search> refactor
   4d ago    31  Refactor the auth middleware               ~/work/api
   1w ago   459  Refactoring notes and cleanup pass         ~/scratch
 ──────────────────────────────────────────────────────────────────────────────
-↑↓/^n^p move · enter resume · ^u clear · esc quit   [1/4]
+Billing refactor — split invoice service
+2026-08-29 14:08 · 144 messages · main
+~/work/api
+0a1b2c3d-4e5f-6789-abcd-ef0123456789
+
+› extract the token check into middleware
+‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
+‹ The invoice service no longer imports the auth module directly.
+──────────────────────────────────────────────────────────────────────────────
+↑↓ move · enter resume · tab hide · ^r remote · ^f fork · ^y cmd  sort:time  [1/4]
 ```
 
 Press <kbd>Enter</kbd> and you are back in that conversation, in the right
@@ -48,10 +57,17 @@ directory.
   without leaving it.
 - **Fuzzy interactive picker.** Type to filter, arrow keys to move, Enter to
   resume. Correct column alignment for wide characters.
+- **Preview panel.** <kbd>Tab</kbd> shows the tail of the conversation, led by
+  the last prompt you typed — the fastest way to tell two similar titles apart.
+- **Sort as you browse.** By recency, title, or working directory, without
+  leaving the picker.
+- **Resume however you need.** In place, as a fork that leaves the original
+  untouched, or with Remote Control so you can carry on from your phone.
 - **Zero dependencies.** No network calls, no API keys; it only reads files
   Claude Code already writes.
-- **Scriptable.** `--json` on every listing command, and anything after `--` is
-  forwarded to `claude`.
+- **Scriptable.** `--json` on every listing command, `--print-cmd` to get the
+  command instead of running it, and anything after `--` is forwarded to
+  `claude`.
 
 ## Why archiving matters
 
@@ -98,6 +114,10 @@ Requires Node.js 18 or newer. Tested on macOS and Linux against Claude Code 2.x.
 csm                       # browse every session, fuzzy-search, Enter to resume
 csm -t billing            # only sessions tagged #billing
 csm resume billing        # resume the newest match without opening the picker
+csm resume billing --remote          # ...with Remote Control, to continue on mobile
+csm resume billing --fork            # ...into a new session, leaving the original
+csm resume billing --print-cmd       # print the command instead of running it
+csm ls --sort dir         # group the listing by working directory
 csm ls --dir --json       # this directory's sessions as JSON
 csm resume billing -- --model opus   # extra flags go straight to claude
 ```
@@ -126,6 +146,11 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `-d, --dir [path]` | Only sessions from this directory (default: cwd) |
 | `-n, --limit <n>` | Cap the number of sessions shown |
 | `-a, --all` | Include expired sessions with no transcript left |
+| `-s, --sort <time\|title\|dir>` | Order sessions (default: `time`) |
+| `-p, --preview` | Open the picker with the preview panel already on |
+| `--remote` | Resume with Remote Control, to continue on mobile |
+| `--fork` | Resume into a new session id, leaving the original untouched |
+| `--print-cmd` | Print the resume command instead of running it |
 | `--json` | Machine-readable output |
 | `--session <id>` | Target this session id instead of the current one |
 | `--no-archive` | With `tag`: record the tag but do not archive |
@@ -141,7 +166,12 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | <kbd>PgUp</kbd> <kbd>PgDn</kbd> / <kbd>Home</kbd> <kbd>End</kbd> | Jump |
 | any character | Filter |
 | <kbd>Ctrl</kbd>+<kbd>u</kbd> | Clear the query |
+| <kbd>Tab</kbd> | Toggle the preview panel |
+| <kbd>Ctrl</kbd>+<kbd>t</kbd> / <kbd>Ctrl</kbd>+<kbd>o</kbd> / <kbd>Ctrl</kbd>+<kbd>g</kbd> | Sort by time / title / directory |
 | <kbd>Enter</kbd> | Resume the selected session |
+| <kbd>Ctrl</kbd>+<kbd>r</kbd> | Resume it with Remote Control |
+| <kbd>Ctrl</kbd>+<kbd>f</kbd> | Resume it as a fork |
+| <kbd>Ctrl</kbd>+<kbd>y</kbd> | Print the resume command and exit |
 | <kbd>Esc</kbd> | Quit |
 
 ### Tagging from inside Claude Code

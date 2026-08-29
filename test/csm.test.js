@@ -11,7 +11,8 @@ process.env.CLAUDE_CONFIG_DIR = root;
 
 const { width, truncate, pad, relTime } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
-const { parseTranscript, scanSessions } = await import('../src/scan.js');
+const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
+const { tailMessages } = await import('../src/preview.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived } = await import('../src/archive.js');
 const { installHooks, uninstallHooks, hooksInstalled } = await import('../src/install.js');
@@ -169,3 +170,66 @@ test('installHooks preserves existing hooks and is idempotent', () => {
 });
 
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+test('sortSessions orders by time, title and directory', () => {
+  const sessions = [
+    { id: 'a', label: 'beta', cwd: '/z', updatedAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'b', label: 'alpha', cwd: '/a', updatedAt: '2026-01-03T00:00:00.000Z' },
+    { id: 'c', label: 'gamma', cwd: null, updatedAt: '2026-01-01T00:00:00.000Z' },
+  ];
+  assert.deepEqual(sortSessions(sessions, 'time').map((s) => s.id), ['b', 'a', 'c']);
+  assert.deepEqual(sortSessions(sessions, 'title').map((s) => s.id), ['b', 'a', 'c']);
+  // Sessions with no recorded directory sort last rather than under an empty key.
+  assert.deepEqual(sortSessions(sessions, 'dir').map((s) => s.id), ['b', 'a', 'c']);
+  // The input is never mutated, so the picker can re-sort the same array.
+  assert.deepEqual(sessions.map((s) => s.id), ['a', 'b', 'c']);
+});
+
+test('sortSessions falls back to recency within an equal key', () => {
+  const sessions = [
+    { id: 'old', label: 'same', cwd: '/p', updatedAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'new', label: 'same', cwd: '/p', updatedAt: '2026-06-01T00:00:00.000Z' },
+  ];
+  assert.deepEqual(sortSessions(sessions, 'title').map((s) => s.id), ['new', 'old']);
+  assert.deepEqual(sortSessions(sessions, 'dir').map((s) => s.id), ['new', 'old']);
+});
+
+test('tailMessages returns the last readable turns and skips noise', () => {
+  const file = writeTranscript('preview-1', [
+    { type: 'user', timestamp: '2026-01-01T00:00:00.000Z', message: { role: 'user', content: 'first question' } },
+    { type: 'assistant', timestamp: '2026-01-01T00:01:00.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] } },
+    { type: 'user', isSidechain: true, message: { role: 'user', content: 'subagent noise' } },
+    { type: 'user', isMeta: true, message: { role: 'user', content: 'meta noise' } },
+    { type: 'user', message: { role: 'user', content: '<local-command-stdout>tool output</local-command-stdout>' } },
+    { type: 'user', timestamp: '2026-01-01T00:02:00.000Z', message: { role: 'user', content: 'second\n  question' } },
+  ]);
+  const msgs = tailMessages(file, { limit: 10 });
+  assert.deepEqual(msgs, [
+    { role: 'user', text: 'first question' },
+    { role: 'assistant', text: 'first answer' },
+    // Newlines and runs of spaces collapse so a turn stays on one preview row.
+    { role: 'user', text: 'second question' },
+  ]);
+  assert.deepEqual(tailMessages(file, { limit: 1 }), [{ role: 'user', text: 'second question' }]);
+});
+
+test('tailMessages reads only the tail and drops the partial first record', () => {
+  const filler = Array.from({ length: 200 }, (_, i) => ({
+    type: 'assistant',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'padding '.repeat(40) + i }] },
+  }));
+  const file = writeTranscript('preview-2', [
+    ...filler,
+    { type: 'user', timestamp: '2026-01-02T00:00:00.000Z', message: { role: 'user', content: 'the very last prompt' } },
+  ]);
+  // A window far smaller than the file forces a seek into the middle of a line.
+  const msgs = tailMessages(file, { limit: 3, bytes: 2048 });
+  assert.equal(msgs.at(-1).text, 'the very last prompt');
+  assert.equal(msgs.length <= 3, true);
+  for (const m of msgs) assert.equal(m.text.includes('{'), false);
+});
+
+test('tailMessages survives a missing file', () => {
+  assert.deepEqual(tailMessages(path.join(root, 'nope.jsonl')), []);
+});

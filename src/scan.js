@@ -6,7 +6,7 @@ import { readJson, writeJson, loadTags } from './store.js';
 const INDEX_VERSION = 2;
 
 /** Pull readable text out of a message record's `content` (string or block array). */
-function textOf(message) {
+export function textOf(message) {
   const content = message?.content;
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -251,4 +251,28 @@ export function scanSessions({ refresh = false } = {}) {
     // A read-only cache is a performance problem, not a correctness one.
   }
   return sessions;
+}
+
+export const SORT_MODES = ['time', 'title', 'dir'];
+
+/**
+ * Reorder an already-scanned list. Sessions with no recorded directory sort
+ * last under `dir` rather than colliding under an empty key, and every mode
+ * falls back to recency so the order is total and stable.
+ */
+export function sortSessions(sessions, mode = 'time') {
+  const byTime = (a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+  const list = [...sessions];
+  if (mode === 'title') {
+    return list.sort((a, b) => (a.label || '').localeCompare(b.label || '') || byTime(a, b));
+  }
+  if (mode === 'dir') {
+    return list.sort(
+      (a, b) =>
+        Number(!a.cwd) - Number(!b.cwd) ||
+        (a.cwd || '').localeCompare(b.cwd || '') ||
+        byTime(a, b)
+    );
+  }
+  return list.sort(byTime);
 }

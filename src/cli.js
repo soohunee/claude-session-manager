@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { scanSessions } from './scan.js';
+import { scanSessions, sortSessions, SORT_MODES } from './scan.js';
 import { loadTags, addTags, removeTags, normalizeTag, ensureHome, readJson } from './store.js';
 import { archiveSession, restoreSession, removeArchive, archiveStats, humanBytes, isArchived } from './archive.js';
 import {
@@ -45,6 +45,11 @@ ${c.bold('OPTIONS')}
   -d, --dir [path]            Only sessions from this directory (default: cwd)
   -n, --limit <n>             Cap the number of sessions shown
   -a, --all                   Include expired sessions with no transcript left
+  -s, --sort <time|title|dir> Order sessions (default: time)
+  -p, --preview               Open the picker with the preview panel already on
+      --remote                Resume with Remote Control, to continue on mobile
+      --fork                  Resume into a new session id, leaving the original
+      --print-cmd             Print the resume command instead of running it
       --json                  Machine-readable output
       --session <id>          Target this session id instead of the current one
       --no-archive            With \`tag\`: record the tag but don't archive
@@ -52,17 +57,25 @@ ${c.bold('OPTIONS')}
   -h, --help                  Show this help
   -v, --version               Show version
 
+${c.bold('PICKER KEYS')}
+  ↑↓ / ^p ^n                  Move            tab       Toggle the preview panel
+  enter                       Resume          ^r        Resume with Remote Control
+  ^y                          Print command   ^f        Resume as a fork
+  ^t / ^o / ^g                Sort by time / title / directory
+  ^u                          Clear query     esc       Quit
+
 ${c.bold('EXAMPLES')}
   csm                         Browse everything, fuzzy-search, hit enter to resume
   csm -t billing              Just the sessions you tagged #billing
   csm resume billing          Resume the newest #billing-matching session
+  csm resume billing --remote Resume it with Remote Control enabled
   csm ls --dir --json         Sessions for this directory as JSON
 
 Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
 
 function parseArgs(argv) {
-  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false };
+  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, sort: 'time', preview: false, mode: 'resume', print: false };
   const rest = [];
   const passthrough = [];
   let i = 0;
@@ -81,6 +94,17 @@ function parseArgs(argv) {
     else if (a === '--session') opts.session = argv[++i];
     else if (a === '--no-archive') opts.archive = false;
     else if (a === '--refresh') opts.refresh = true;
+    else if (a === '-s' || a === '--sort') {
+      const mode = argv[++i];
+      if (!SORT_MODES.includes(mode)) {
+        console.error(c.red(`Unknown sort mode: ${mode}. Use one of ${SORT_MODES.join(', ')}.`));
+        process.exit(1);
+      }
+      opts.sort = mode;
+    } else if (a === '-p' || a === '--preview') opts.preview = true;
+    else if (a === '--remote') opts.mode = 'remote';
+    else if (a === '--fork') opts.mode = 'fork';
+    else if (a === '--print-cmd') opts.print = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a === '-v' || a === '--version') opts.version = true;
     else rest.push(a);
@@ -99,6 +123,7 @@ function selectSessions(opts, query) {
       [s.label, s.cwd, s.id, ...(s.tags || [])].filter(Boolean).join(' ').toLowerCase().includes(q)
     );
   }
+  sessions = sortSessions(sessions, opts.sort);
   if (opts.limit) sessions = sessions.slice(0, opts.limit);
   return sessions;
 }
@@ -125,8 +150,20 @@ function printList(sessions) {
   }
 }
 
-/** Restore from archive if needed, then hand the terminal over to Claude Code. */
-function resume(session, passthrough) {
+/** Single-quote a path for a shell command the user will paste back. */
+function shellQuote(value) {
+  return `'` + String(value).replace(/'/g, `'\\''`) + `'`;
+}
+
+/**
+ * Restore from archive if needed, then hand the terminal over to Claude Code.
+ *
+ * `mode` selects what handing over means: resume in place, resume with Remote
+ * Control so the conversation can continue on mobile, or resume as a fork that
+ * leaves the original untouched. `print` is orthogonal to all three — it emits
+ * the command that would have run and exits.
+ */
+function resume(session, passthrough, { mode = 'resume', print = false } = {}) {
   if (!session.cwd) {
     console.error(c.red('This session has no recorded working directory; cannot resume.'));
     process.exit(1);
@@ -143,15 +180,29 @@ function resume(session, passthrough) {
     }
     if (!res.skipped) console.log(c.dim(`Restored archived transcript into ${homeShort(path.dirname(res.restoredTo))}`));
   }
-  console.log(c.dim(`→ ${homeShort(session.cwd)}  ${c.bold(session.label)}`));
-  const child = spawn('claude', ['--resume', session.id, ...passthrough], {
+
+  const args = ['--resume', session.id];
+  if (mode === 'fork') args.push('--fork-session');
+  if (mode === 'remote') args.push('--remote-control');
+  args.push(...passthrough);
+
+  // Printing happens after any restore, so the command still works if the
+  // transcript only existed in the archive when csm was asked for it.
+  if (print) {
+    console.log(`cd ${shellQuote(session.cwd)} && claude ${args.join(' ')}`);
+    return;
+  }
+
+  const note = mode === 'fork' ? c.dim(' (fork)') : mode === 'remote' ? c.dim(' (remote control)') : '';
+  console.log(c.dim(`→ ${homeShort(session.cwd)}  ${c.bold(session.label)}`) + note);
+  const child = spawn('claude', args, {
     cwd: session.cwd,
     stdio: 'inherit',
   });
   child.on('error', (err) => {
     if (err.code === 'ENOENT') {
       console.error(c.red('`claude` was not found on your PATH.'));
-      console.error(c.dim(`Run it yourself with:  cd ${session.cwd} && claude --resume ${session.id}`));
+      console.error(c.dim(`Run it yourself with:  cd ${shellQuote(session.cwd)} && claude ${args.join(' ')}`));
     } else {
       console.error(c.red(String(err.message)));
     }
@@ -349,12 +400,21 @@ async function cmdPick(opts, rest, passthrough) {
   const subtitle =
     `${plural(sessions.length, 'session')} shown` +
     (expired && !opts.all ? ` · ${expired} expired, transcript gone (-a to list)` : '');
-  const chosen = await pick(sessions, { title: titleBits.join('  '), subtitle, query });
+  const chosen = await pick(sessions, {
+    title: titleBits.join('  '),
+    subtitle,
+    query,
+    preview: opts.preview,
+    sort: opts.sort,
+  });
   if (!chosen) {
     if (!process.stdout.isTTY) printList(sessions);
     return;
   }
-  resume(chosen, passthrough);
+  // A key pressed in the picker refines what the flags asked for: ^r and ^f
+  // choose the mode, ^y only switches the result to a printed command.
+  const mode = chosen.action === 'remote' || chosen.action === 'fork' ? chosen.action : opts.mode;
+  resume(chosen.session, passthrough, { mode, print: opts.print || chosen.action === 'print' });
 }
 
 export async function main(argv) {
@@ -404,7 +464,7 @@ export async function main(argv) {
         console.error(c.red('No session matched.'));
         process.exit(1);
       }
-      return resume(sessions[0], passthrough);
+      return resume(sessions[0], passthrough, { mode: opts.mode, print: opts.print });
     }
     case 'all':
       return cmdPick(opts, rest.slice(1), passthrough);
