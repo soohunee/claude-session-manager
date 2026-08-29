@@ -18,6 +18,8 @@ const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
 const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
+const { recordLink, removeLink, loadLinks, linkedIds, buildTree } = await import('../src/links.js');
+const { extractHandoff, frameHandoff } = await import('../src/handoff.js');
 
 const CWD = '/tmp/csm-fixture-project';
 
@@ -397,4 +399,103 @@ test('tailMessages reads only the tail and drops the partial first record', () =
 
 test('tailMessages survives a missing file', () => {
   assert.deepEqual(tailMessages(path.join(root, 'nope.jsonl')), []);
+});
+
+test('lineage survives a session losing its last tag', () => {
+  addTags('parent-a', ['keepme']);
+  recordLink('child-a', 'parent-a', { title: 'the parent' });
+  removeTags('parent-a', []);
+  assert.equal(loadTags().sessions['parent-a'], undefined);
+  // The link store is separate precisely so untagging cannot take it out.
+  assert.equal(loadLinks().links['child-a'].parent, 'parent-a');
+  assert.deepEqual([...linkedIds()].sort(), ['child-a', 'parent-a']);
+  removeLink('child-a');
+  assert.equal(loadLinks().links['child-a'], undefined);
+});
+
+test('recordLink refuses a self-link and removeLink reports a miss', () => {
+  assert.equal(recordLink('same', 'same'), null);
+  assert.equal(recordLink('only-child', null), null);
+  assert.equal(removeLink('never-existed'), false);
+});
+
+test('buildTree nests children and promotes the ones whose parent is out of view', () => {
+  const links = {
+    kid: { parent: 'root' },
+    grandkid: { parent: 'kid' },
+    orphan: { parent: 'gone' },
+  };
+  const sessions = ['root', 'kid', 'grandkid', 'orphan', 'loner'].map((id) => ({ id }));
+  const tree = buildTree(sessions, links);
+  assert.deepEqual(
+    tree.map((s) => [s.id, s.depth]),
+    [['root', 0], ['kid', 1], ['grandkid', 2], ['orphan', 0], ['loner', 0]]
+  );
+});
+
+test('buildTree survives a cycle in a hand-edited store', () => {
+  const links = { a: { parent: 'b' }, b: { parent: 'a' } };
+  const tree = buildTree([{ id: 'a' }, { id: 'b' }], links);
+  assert.equal(tree.length, 2);
+  assert.deepEqual(tree.map((s) => s.id).sort(), ['a', 'b']);
+});
+
+test('a derived session is labelled after its parent, not the handoff boilerplate', () => {
+  const seed = 'A previous session ran out of room, so its context has been handed to you.';
+  writeTranscript('derived-1', [
+    { type: 'user', cwd: CWD, timestamp: '2026-02-01T00:00:00.000Z', message: { role: 'user', content: seed } },
+  ]);
+  recordLink('derived-1', 'parent-b', { title: 'the original work' });
+  const found = scanSessions({ refresh: true }).find((s) => s.id === 'derived-1');
+  assert.equal(found.parent, 'parent-b');
+  assert.equal(found.label, '\u2191 the original work');
+  removeLink('derived-1');
+});
+
+test('extractHandoff records what was asked and done without a model', () => {
+  const file = writeTranscript('handoff-src', [
+    { type: 'user', cwd: CWD, timestamp: '2026-03-01T00:00:00.000Z', message: { role: 'user', content: 'fix the parser' } },
+    { type: 'user', cwd: CWD, timestamp: '2026-03-01T00:00:30.000Z', message: { role: 'user', content: '<command-name>/noise</command-name>' } },
+    {
+      type: 'assistant',
+      cwd: CWD,
+      timestamp: '2026-03-01T00:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', name: 'Edit', input: { file_path: '/src/parser.js' } },
+          { type: 'tool_use', name: 'Bash', input: { command: 'npm test\nsecond line' } },
+        ],
+      },
+    },
+  ]);
+  const md = extractHandoff({ id: 'handoff-src', label: 'Parser work', cwd: CWD, file, messages: 3 });
+  assert.match(md, /^# Handoff — Parser work/);
+  assert.match(md, /fix the parser/);
+  assert.match(md, /\/src\/parser\.js/);
+  assert.match(md, /npm test/);
+  assert.match(md, /Edit 1×/);
+  // The command envelope is noise, and only the first line of a command is kept.
+  assert.equal(md.includes('command-name'), false);
+  assert.equal(md.includes('second line'), false);
+});
+
+test('frameHandoff drops the heading the model writes for itself', () => {
+  const framed = frameHandoff(
+    { id: 'p1', label: 'Real title', cwd: CWD },
+    '# Session Handoff — something\n\n## Goal\n\nship it'
+  );
+  assert.match(framed, /^# Handoff — Real title/);
+  assert.equal(framed.includes('# Session Handoff'), false);
+  assert.match(framed, /## Goal/);
+  assert.match(framed, /ship it/);
+  // Exactly one top-level heading survives.
+  assert.equal(framed.split('\n').filter((l) => /^# /.test(l)).length, 1);
+});
+
+test('parseArgs reads the derive flags', () => {
+  const { opts } = parseArgs(['derive', '--fast', '--note', 'keep going', '--model', 'haiku']);
+  assert.equal(opts.fast, true);
+  assert.equal(opts.note, 'keep going');
+  assert.equal(opts.model, 'haiku');
 });

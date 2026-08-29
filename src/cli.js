@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scanSessions, sortSessions, SORT_MODES } from './scan.js';
@@ -17,7 +18,9 @@ import {
   hookEnd,
   resolveCurrentSession,
 } from './install.js';
-import { claudeHome, projectsDir, settingsFile } from './paths.js';
+import { recordLink, removeLink, loadLinks, linkedIds, buildTree } from './links.js';
+import { extractHandoff, summarizeHandoff, frameHandoff, writeHandoff } from './handoff.js';
+import { claudeHome, projectsDir, settingsFile, handoffDir } from './paths.js';
 import { pick } from './tui.js';
 import { searchTranscript, snippet } from './search.js';
 import { c, pad, truncate, relTime, plural } from './format.js';
@@ -35,6 +38,8 @@ ${c.bold('USAGE')}
   csm ls [query]              Print sessions instead of opening the picker
   csm resume <id|query>       Resume directly, skipping the picker
   csm search <text>           Search what was actually said, across every session
+  csm derive [id|query]       Start a fresh session carrying a handoff from this one
+  csm tree [query]            Show sessions as the tree of what was derived from what
   csm tag <tag...>            Tag the session in this directory and archive it
   csm untag <tag...>          Remove tags (omit tags to clear the session)
   csm tags                    List every tag with its session count
@@ -56,7 +61,10 @@ ${c.bold('OPTIONS')}
       --fork                  Resume into a new session id, leaving the original
       --print-cmd             Print the resume command instead of running it
       --json                  Machine-readable output
-      --session <id>          Target this session id instead of the current one
+      --session <id>          Target this session id, matched on an id prefix
+      --fast                  With \`derive\`: build the handoff without asking a model
+      --note <text>           With \`derive\`: extra instructions for the new session
+      --model <name>          Model to write the handoff with (default: your usual one)
       --no-archive            With \`tag\`: record the tag but don't archive
       --refresh               Ignore the metadata cache and re-read every file
   -h, --help                  Show this help
@@ -78,12 +86,14 @@ ${c.bold('EXAMPLES')}
   csm resume billing --remote Resume it with Remote Control enabled
   csm search "rate limit"     Find the conversation where you discussed it
   csm ls --dir --json         Sessions for this directory as JSON
+  csm derive                  Hand this session's context to a fresh one and open it
+  csm tree                    See which sessions grew out of which
 
 Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
 
 export function parseArgs(argv) {
-  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false };
+  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, note: null, model: null };
   const rest = [];
   const passthrough = [];
   let i = 0;
@@ -110,6 +120,9 @@ export function parseArgs(argv) {
     else if (a === '--json') opts.json = true;
     else if (a === '--session') opts.session = argv[++i];
     else if (a === '--no-archive') opts.archive = false;
+    else if (a === '--fast') opts.fast = true;
+    else if (a === '--note') opts.note = argv[++i] || null;
+    else if (a === '--model') opts.model = argv[++i] || null;
     else if (a === '--refresh') opts.refresh = true;
     else if (a === '--tagged') opts.tagged = true;
     else if (a === '-s' || a === '--sort') {
@@ -152,6 +165,11 @@ function homeShort(p) {
   return home && p && p.startsWith(home) ? '~' + p.slice(home.length) : p || '?';
 }
 
+/** Indent a derived session under the one it came from. */
+export function treePrefix(depth) {
+  return depth ? '  '.repeat(depth - 1) + '\u2514 ' : '';
+}
+
 function printList(sessions) {
   if (!sessions.length) {
     console.log(c.dim('No sessions matched.'));
@@ -164,9 +182,45 @@ function printList(sessions) {
       `${flag} ${c.dim(s.id.slice(0, 8))} ${c.dim(pad(relTime(s.updatedAt), 9))}${pad(
         s.messages ? String(s.messages) : '-',
         5
-      )}${pad(s.label, 48)} ${c.blue(truncate(homeShort(s.cwd), 34))} ${tags}`
+      )}${pad(treePrefix(s.depth || 0) + s.label, 48)} ${c.blue(truncate(homeShort(s.cwd), 34))} ${tags}`
     );
   }
+}
+
+/**
+ * The session a command should act on.
+ *
+ * `--session` matches on an id prefix, so the eight characters the list prints
+ * are enough and nobody has to go looking for the full uuid. An id that matches
+ * nothing on disk is still returned as a bare reference, because a tag outlives
+ * the session it was attached to and untagging one has to stay possible.
+ */
+function resolveTarget(opts, query, sessions) {
+  if (opts.session) {
+    const all = sessions || scanSessions();
+    const exact = all.find((s) => s.id === opts.session);
+    if (exact) return exact;
+    const hits = all.filter((s) => s.id.startsWith(opts.session));
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1) {
+      console.error(c.red(`${opts.session} matches ${hits.length} sessions:`));
+      for (const h of hits) console.error(c.dim(`  ${h.id}  ${truncate(h.label, 50)}`));
+      process.exit(1);
+    }
+    return { id: opts.session };
+  }
+  if (query) {
+    const hits = selectSessions({ ...opts, session: null }, query);
+    if (!hits.length) {
+      console.error(c.red('No session matched.'));
+      process.exit(1);
+    }
+    return hits[0];
+  }
+  const found = resolveCurrentSession(process.cwd());
+  if (!found) return null;
+  const all = sessions || scanSessions();
+  return all.find((s) => s.id === found.id) || { id: found.id };
 }
 
 /** Single-quote a path for a shell command the user will paste back. */
@@ -269,23 +323,148 @@ function cmdTag(opts, rest) {
 }
 
 function cmdUntag(opts, rest) {
-  const id = opts.session || resolveCurrentSession(process.cwd())?.id;
-  if (!id) {
+  const tags = rest.map(normalizeTag).filter(Boolean);
+  const target = resolveTarget(opts, null, null);
+  if (!target) {
     console.error(c.red('Could not identify a session. Pass --session <id>.'));
+    console.error(c.dim('The first eight characters `csm ls` prints are enough.'));
     process.exit(1);
   }
-  const tags = rest.map(normalizeTag).filter(Boolean);
+  const id = target.id;
   const entry = removeTags(id, tags);
   if (!entry) {
     console.log(c.dim('That session had no tags.'));
     return;
   }
-  if (entry.tags.length === 0) {
-    removeArchive(id);
-    console.log(`${c.yellow('untagged')} ${id.slice(0, 8)} ${c.dim('· archive removed')}`);
-  } else {
-    console.log(`${c.yellow('untagged')} ${id.slice(0, 8)} ${c.dim('· still: ')}${entry.tags.map((t) => c.magenta('#' + t)).join(' ')}`);
+  const label = target.label ? c.dim(' · ') + truncate(target.label, 40) : '';
+  if (entry.tags.length > 0) {
+    console.log(
+      `${c.yellow('untagged')} ${id.slice(0, 8)}${label} ${c.dim('· still: ')}` +
+        entry.tags.map((t) => c.magenta('#' + t)).join(' ')
+    );
+    return;
   }
+  // A session that a tree hangs off keeps its archive even with no tags left:
+  // deleting it would strand every session derived from it under a root whose
+  // transcript Claude Code has already cleaned up.
+  if (linkedIds().has(id)) {
+    console.log(`${c.yellow('untagged')} ${id.slice(0, 8)}${label} ${c.dim('· archive kept, it is part of a session tree')}`);
+    return;
+  }
+  removeArchive(id);
+  console.log(`${c.yellow('untagged')} ${id.slice(0, 8)}${label} ${c.dim('· archive removed')}`);
+}
+
+/**
+ * Hand one session's context to a fresh one.
+ *
+ * This automates what people otherwise do by hand when a conversation fills up:
+ * ask it to write down where things stand, open a new session, and point the new
+ * one at that document. Doing it here means the link between the two is recorded
+ * rather than lost, which is what makes `csm tree` possible.
+ */
+async function cmdDerive(opts, rest, passthrough) {
+  const sessions = scanSessions();
+  const parent = resolveTarget(opts, rest.join(' ') || null, sessions);
+  if (!parent) {
+    console.error(c.red('Could not identify a session in this directory.'));
+    console.error(c.dim('Pass --session <id>, or a query that matches one.'));
+    process.exit(1);
+  }
+  if (!parent.cwd) {
+    console.error(c.red('That session has no recorded working directory; cannot derive from it.'));
+    process.exit(1);
+  }
+  if (!fs.existsSync(parent.cwd)) {
+    console.error(c.red(`Directory no longer exists: ${parent.cwd}`));
+    process.exit(1);
+  }
+  // Summarising resumes the parent, so an archived-only transcript has to be
+  // back in place first — the same restore `resume` does.
+  if (parent.source === 'archive' || !parent.file || !fs.existsSync(parent.file)) {
+    const res = restoreSession(parent);
+    if (!res.ok) {
+      console.error(c.red(`Cannot derive: ${res.reason}. The transcript is gone.`));
+      process.exit(1);
+    }
+  }
+
+  let text = null;
+  let cost = null;
+  if (!opts.fast) {
+    console.log(c.dim(`Asking ${c.bold(truncate(parent.label, 40))} to write its own handoff…`));
+    const res = await summarizeHandoff(parent, { model: opts.model });
+    if (res.ok) {
+      text = res.text;
+      cost = res.cost;
+    } else {
+      console.log(c.yellow(`  the model could not summarise it (${res.reason})`));
+      console.log(c.dim('  falling back to a handoff extracted from the transcript'));
+    }
+  }
+  const mdPath = writeHandoff(parent.id, text ? frameHandoff(parent, text) : extractHandoff(parent));
+  if (cost != null) console.log(c.dim(`  handoff written · $${cost.toFixed(4)}`));
+
+  // The parent is now the root of a tree, so it has to outlive Claude Code's
+  // cleanup whether or not anyone remembered to tag it.
+  archiveSession(parent);
+
+  const child = crypto.randomUUID();
+  recordLink(child, parent.id, { handoff: mdPath, cwd: parent.cwd, title: parent.label });
+
+  const seed =
+    `A previous session ran out of room, so its context has been handed to you.\n\n` +
+    `Read ${mdPath} — it is a handoff document written for exactly this moment — and get up to speed.\n\n` +
+    `Then tell me in a few lines what you understand the state of the work to be and what you think comes next. ` +
+    `Do not change anything until I say so.` +
+    (opts.note ? `\n\n${opts.note}` : '');
+
+  const args = ['--session-id', child, '--add-dir', handoffDir(), ...passthrough, seed];
+  if (opts.print) {
+    console.log(`cd ${shellQuote(parent.cwd)} && claude --session-id ${child} --add-dir ${shellQuote(handoffDir())} ${shellQuote(seed)}`);
+    return;
+  }
+
+  console.log(
+    `${c.green('derived')} ${c.dim(child.slice(0, 8))} ${c.dim('from')} ${c.dim(parent.id.slice(0, 8))} ` +
+      c.dim(`· handoff at ${homeShort(mdPath)}`) +
+      (cost != null ? c.dim(` · $${cost.toFixed(4)}`) : '')
+  );
+  const proc = spawn('claude', args, { cwd: parent.cwd, stdio: 'inherit' });
+  proc.on('error', (err) => {
+    // Without this the store would keep pointing at a session that was never
+    // created, and `csm tree` would grow a permanent phantom branch.
+    removeLink(child);
+    if (err.code === 'ENOENT') {
+      console.error(c.red('`claude` was not found on your PATH.'));
+      console.error(c.dim(`The handoff is still at ${mdPath} — open a session yourself and point it there.`));
+    } else {
+      console.error(c.red(String(err.message)));
+    }
+    process.exit(127);
+  });
+  proc.on('exit', (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exit(code ?? 0);
+  });
+}
+
+function cmdTree(opts, rest) {
+  const sessions = selectSessions(opts, rest.join(' ') || null);
+  const links = loadLinks().links;
+  const tree = buildTree(sessions, links);
+  if (opts.json) return console.log(JSON.stringify(tree, null, 2));
+  printList(tree);
+  const derived = tree.filter((s) => s.depth > 0).length;
+  const orphans = tree.filter((s) => s.depth === 0 && links[s.id]).length;
+  if (!Object.keys(links).length) {
+    console.log(c.dim('\nNothing has been derived yet. `csm derive` hands a session to a fresh one.'));
+    return;
+  }
+  console.log(
+    c.dim(`\n${plural(derived, 'derived session')} shown`) +
+      (orphans ? c.dim(` · ${plural(orphans, 'other')} listed at the top level because the parent is not in view`) : '')
+  );
 }
 
 function cmdTags() {
@@ -324,17 +503,38 @@ function cmdArchive() {
 }
 
 function cmdPrune() {
+  const sessions = scanSessions();
+  // A `--print-cmd` derive records the link before the session exists, so a
+  // command that was printed and never run leaves a child id nothing will ever
+  // create. Drop those first, or they would pin their parent's archive forever.
+  // A child that did exist and has since expired is left alone: the tree it
+  // belongs to is still a true record of what happened.
+  const known = new Set(sessions.map((s) => s.id));
+  let phantom = 0;
+  for (const child of Object.keys(loadLinks().links)) {
+    if (!known.has(child) && removeLink(child)) phantom++;
+  }
+
   const tagged = new Set(Object.keys(loadTags().sessions));
+  // Lineage counts as a reason to keep an archive, the same as a tag does.
+  const linked = linkedIds();
   const stats = archiveStats();
   let removed = 0;
-  const sessions = scanSessions();
+  let kept = 0;
   for (const s of sessions) {
-    if (s.archived && !tagged.has(s.id) && removeArchive(s.id)) removed++;
+    if (!s.archived || tagged.has(s.id)) continue;
+    if (linked.has(s.id)) {
+      kept++;
+      continue;
+    }
+    if (removeArchive(s.id)) removed++;
   }
+  const keptNote = kept ? c.dim(` · kept ${plural(kept, 'untagged archive')} held by a session tree`) : '';
+  const phantomNote = phantom ? c.dim(` · dropped ${plural(phantom, 'link')} to a session that was never started`) : '';
   console.log(
-    removed
+    (removed
       ? `${c.yellow('pruned')} ${plural(removed, 'archived session')} ${c.dim('with no tags')}`
-      : c.dim(`Nothing to prune. Archive holds ${plural(stats.count, 'session')}.`)
+      : c.dim(`Nothing to prune. Archive holds ${plural(stats.count, 'session')}.`)) + keptNote + phantomNote
   );
 }
 
@@ -393,6 +593,9 @@ function cmdDoctor() {
   );
   console.log(`  tagged          ${tagged.length}`);
   console.log(`  archive         ${plural(stats.count, 'session')}, ${humanBytes(stats.bytes)}`);
+  const links = loadLinks().links;
+  const derived = Object.keys(links).length;
+  console.log(`  derived         ${derived}${derived ? c.dim('  (see `csm tree`)') : ''}`);
 
   if (expired > 0) {
     console.log('');
@@ -545,6 +748,10 @@ export async function main(argv) {
     }
     case 'search':
       return cmdSearch(opts, rest.slice(1));
+    case 'derive':
+      return cmdDerive(opts, rest.slice(1), passthrough);
+    case 'tree':
+      return cmdTree(opts, rest.slice(1));
     case 'resume': {
       const sessions = selectSessions(opts, rest.slice(1).join(' ') || null);
       if (!sessions.length) {

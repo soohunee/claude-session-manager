@@ -76,6 +76,12 @@ directory.
 - **Full-text search.** `csm search "rate limit"` looks inside the conversations
   themselves, not just their titles — for when you remember what was said but
   not where.
+- **Hand a full session to a fresh one.** `csm derive` asks a session to write
+  down where things stand, opens a new session on that document, and remembers
+  which came from which — the thing you would otherwise do by hand every time a
+  conversation fills up.
+- **Session trees.** `csm tree` shows what grew out of what, so a chain of
+  handoffs stays legible instead of looking like unrelated sessions.
 - **Tags from inside Claude Code.** `/persist billing` marks the running session
   without leaving it.
 - **Fuzzy interactive picker.** Type to filter, arrow keys to move, Enter to
@@ -138,6 +144,8 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `csm ls [query]` | Print sessions instead of opening the picker |
 | `csm resume <id\|query>` | Resume directly, skipping the picker |
 | `csm search <text>` | Search what was said, across every session |
+| `csm derive [id\|query]` | Start a fresh session carrying a handoff from this one |
+| `csm tree [query]` | Show sessions as the tree of what was derived from what |
 | `csm tag <tag...>` | Tag the session in this directory and archive it |
 | `csm untag <tag...>` | Remove tags (omit tags to clear the session) |
 | `csm tags` | List every tag with its session count |
@@ -162,7 +170,10 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `--fork` | Resume into a new session id, leaving the original untouched |
 | `--print-cmd` | Print the resume command instead of running it |
 | `--json` | Machine-readable output |
-| `--session <id>` | Target this session id instead of the current one |
+| `--session <id>` | Target this session id, matched on an id prefix |
+| `--fast` | With `derive`: build the handoff without asking a model |
+| `--note <text>` | With `derive`: extra instructions for the new session |
+| `--model <name>` | Model to write the handoff with (default: your usual one) |
 | `--no-archive` | With `tag`: record the tag but do not archive |
 | `--refresh` | Ignore the metadata cache and re-read every file |
 | `-h, --help` | Show help |
@@ -202,6 +213,44 @@ csm -t billing-refactor
 
 A session can carry several tags, and tags may be written in any language.
 
+### Continuing a session that filled up
+
+When a conversation runs out of room, the usual move is to ask it for a summary,
+open a new session, and paste in the path to that summary. `csm derive` does the
+whole thing:
+
+```bash
+csm derive                    # from the session running in this directory
+csm derive 557dac2e           # or any session, matched on an id prefix
+csm derive --fast             # skip the model, build the handoff from the transcript
+csm derive --note "Start with the failing test."
+```
+
+It forks the parent to write the handoff, so the parent transcript is left
+exactly as it was — the summary request never becomes part of the conversation
+you are trying to preserve. The handoff lands in `~/.claude/csm/handoff/`, the
+parent is archived so it outlives Claude Code's cleanup, and the new session
+opens already pointed at the document.
+
+`--fast` skips the model entirely and assembles the handoff from the transcript:
+what was asked, which files were touched, which commands ran. It is instant and
+free, but it records what happened rather than why. csm also falls back to it on
+its own if the parent's context is too full for a summary to come back.
+
+Because the link between the two is written down, the chain stays visible:
+
+```
+$ csm tree
+A 557dac2e 3h ago   412  Billing auth refactor            ~/work/api  #billing
+  0ddad746 1h ago   180  └ ↑ Billing auth refactor        ~/work/api
+    9c1f22ae 4m ago  22  ​  └ ↑ Billing auth refactor      ~/work/api
+```
+
+A derived session whose parent is filtered out of the view is listed at the top
+level rather than hidden, and `csm untag` and `csm prune` leave the archive of
+any session a tree hangs off alone — dropping it would strand the branches under
+a root that no longer exists.
+
 ## How it works
 
 Everything comes from files Claude Code already writes:
@@ -210,7 +259,7 @@ Everything comes from files Claude Code already writes:
 | --- | --- |
 | `~/.claude/projects/<dir>/<session>.jsonl` | Title, working directory, git branch, message count, timestamps |
 | `~/.claude/history.jsonl` | The global, cross-directory list of session ids |
-| `~/.claude/csm/` | Tags, archived transcripts, metadata cache — everything csm owns |
+| `~/.claude/csm/` | Tags, session lineage, handoff documents, archived transcripts, metadata cache — everything csm owns |
 
 Claude Code writes an `ai-title` record into each transcript, so the titles in
 the picker are its own rather than something csm generates. Session metadata is
@@ -245,6 +294,15 @@ To keep untagged sessions around longer, raise `cleanupPeriodDays` in
   a hook runs with a minimal environment and cannot rely on `node` being on
   PATH. If a version manager later retires that build the hooks stop doing
   anything; `csm doctor` reports it and `csm init` repairs them in place.
+- Session lineage is csm's own record, kept in `~/.claude/csm/links.json`.
+  Claude Code stores nothing we could use instead: forking rewrites every record
+  in the copied transcript with the new session id, so a derived session carries
+  no trace of where it came from. The link exists only because csm writes it
+  down, and it is kept apart from tags so that untagging a session cannot take
+  the tree with it.
+- `csm derive` without `--fast` makes one API call that re-reads the whole parent
+  conversation, so deriving from a very large session is not free. The cost is
+  printed when the handoff is written.
 - csm reads Claude Code's on-disk formats, which are not a public API. A Claude
   Code update could change them; parsing failures are skipped quietly and
   `csm doctor` is the place to look when numbers seem wrong.
