@@ -60,7 +60,7 @@ Billing refactor — split invoice service
 ‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
 ‹ The invoice service no longer imports the auth module directly.
 ──────────────────────────────────────────────────────────────────────────────
-↑↓ move · enter resume · tab hide · ^r remote · ^f fork · ^y cmd  sort:time  [1/4]
+↑↓ move · enter resume · tab hide · ^a tagged · ^r remote · ^f fork · ^y cmd  sort:time  [1/4]
 ```
 
 Press <kbd>Enter</kbd> and you are back in that conversation, in the right
@@ -82,8 +82,9 @@ directory.
   resume. Correct column alignment for wide characters.
 - **Preview panel.** <kbd>Tab</kbd> shows the tail of the conversation, led by
   the last prompt you typed — the fastest way to tell two similar titles apart.
-- **Sort as you browse.** By recency, title, or working directory, without
-  leaving the picker.
+- **Sort and filter as you browse.** Order by recency, title, or working
+  directory, and narrow to just your tagged sessions, without leaving the
+  picker.
 - **Resume however you need.** In place, as a fork that leaves the original
   untouched, or with Remote Control so you can carry on from your phone.
 - **Zero dependencies.** No network calls, no API keys; it only reads files
@@ -177,6 +178,7 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | <kbd>Ctrl</kbd>+<kbd>u</kbd> | Clear the query |
 | <kbd>Tab</kbd> | Toggle the preview panel |
 | <kbd>Ctrl</kbd>+<kbd>t</kbd> / <kbd>Ctrl</kbd>+<kbd>o</kbd> / <kbd>Ctrl</kbd>+<kbd>g</kbd> | Sort by time / title / directory |
+| <kbd>Ctrl</kbd>+<kbd>a</kbd> | Show only tagged sessions (toggle) |
 | <kbd>Enter</kbd> | Resume the selected session |
 | <kbd>Ctrl</kbd>+<kbd>r</kbd> | Resume it with Remote Control |
 | <kbd>Ctrl</kbd>+<kbd>f</kbd> | Resume it as a fork |

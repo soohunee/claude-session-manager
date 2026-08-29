@@ -33,6 +33,18 @@ CI runs the suite on Ubuntu and macOS across Node 18, 20, 22, and 24. Keep the
 dependency count at zero, and add a test for anything that touches tags,
 archives, or `settings.json` — those three write to files a user cares about.
 
+A change to what the tool does is not finished until the docs match it. Before
+opening the PR, check every place the behaviour is described:
+
+- `README.md` — the feature list, the command and option tables, the picker
+  key table, and the sample screen near the top, whose footer line is copied
+  from what the picker actually prints
+- `HELP` in `src/cli.js` — usage, options, and picker keys
+- `CONTRIBUTING.md`, if the workflow itself changed
+
+The sample screen and the key tables go stale most easily, because nothing
+fails when they drift.
+
 Set `CLAUDE_CONFIG_DIR` to experiment without touching your real `~/.claude`:
 
 ```bash
