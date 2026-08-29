@@ -1,8 +1,8 @@
 <h1 align="center">csm</h1>
 
 <p align="center">
-  <b>Find and resume any Claude Code session, from any directory.</b><br>
-  Tag the ones that matter and they survive Claude Code's 30-day cleanup.
+  <b>Claude Code deletes your conversations after 30 days.</b><br>
+  <code>csm</code> keeps the ones that matter — and finds them again from any directory.
 </p>
 
 <p align="center">
@@ -15,13 +15,32 @@
 
 ---
 
-`claude --resume` only lists sessions from the directory you happen to be standing
-in. Work doesn't stay in one directory: you start something in `~/work/api`,
-follow it into `~/work/infra`, and a week later you cannot remember where you
-were when you had that conversation — so you cannot get back to it.
+Claude Code removes transcripts older than `cleanupPeriodDays` — **30 days by
+default**. Run `csm doctor` on a machine you have been working on for a while
+and the number is usually worse than you expect:
 
-`csm` indexes every Claude Code session on your machine, whichever directory it
-came from, and resumes the one you pick.
+```
+  sessions        83 across 5 directories
+  resumable       29
+  expired         54  (transcript deleted by Claude Code cleanup)
+```
+
+Fifty-four of those conversations still appear in Claude Code's prompt history,
+so you can see that they happened. The transcripts are gone. Nothing can bring
+them back, and nothing warned you.
+
+**`csm` is the copy that survives.** Tag a session — from the shell, or with
+`/persist` without leaving Claude Code — and its transcript is copied somewhere
+cleanup does not reach, then refreshed every time you close the session. Months
+later `csm` puts the file back where Claude Code expects it and resumes the
+conversation as if nothing had happened.
+
+Finding it again is the other half of the problem, because `claude --resume`
+only lists sessions from the directory you happen to be standing in. Work does
+not stay in one directory: you start something in `~/work/api`, follow it into
+`~/work/infra`, and a week later you cannot remember where you were. So `csm`
+indexes every session on the machine, whichever directory it came from, and
+lets you search what was actually said in them.
 
 ```
 Claude sessions  29 sessions shown · 54 expired, transcript gone (-a to list)
@@ -49,14 +68,14 @@ directory.
 
 ## Features
 
+- **Archives that outlive cleanup.** Tagged sessions are copied out of Claude
+  Code's reach and restored in place when you resume them, and refreshed each
+  time the session ends so the copy never falls behind.
 - **Cross-directory search.** One picker over every session on the machine, not
   just the current project.
 - **Full-text search.** `csm search "rate limit"` looks inside the conversations
   themselves, not just their titles — for when you remember what was said but
   not where.
-- **Archives that outlive cleanup.** Tagged sessions are copied out of Claude
-  Code's reach and restored in place when you resume them, and refreshed each
-  time the session ends so the copy never falls behind.
 - **Tags from inside Claude Code.** `/persist billing` marks the running session
   without leaving it.
 - **Fuzzy interactive picker.** Type to filter, arrow keys to move, Enter to
@@ -72,28 +91,6 @@ directory.
 - **Scriptable.** `--json` on every listing command, `--print-cmd` to get the
   command instead of running it, and anything after `--` is forwarded to
   `claude`.
-
-## Why archiving matters
-
-Claude Code deletes transcripts older than `cleanupPeriodDays` — **30 days by
-default**. Run `csm doctor` and you will probably see something like this:
-
-```
-  sessions        83 across 5 directories
-  resumable       29
-  expired         54  (transcript deleted by Claude Code cleanup)
-```
-
-Those 54 conversations are listed only because Claude Code's global prompt
-history still mentions them. The transcripts themselves are gone, and no tool can
-bring them back.
-
-So `csm` does more than label sessions: tagging one **copies its transcript into
-an archive** that cleanup does not touch, and the `SessionEnd` hook refreshes
-that copy every time you close the session, so it holds the whole conversation
-rather than a snapshot from the moment you tagged it. Months later `csm` puts
-the file back where Claude Code expects it and resumes the session as if nothing
-had happened.
 
 ## Installation
 

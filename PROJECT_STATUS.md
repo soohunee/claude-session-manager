@@ -131,7 +131,7 @@ claude-session-manager/
 - [x] `package.json`에 `repository`, `bugs`, `homepage`, `author` 필드 추가
 - [x] README를 오픈소스 관례에 맞게 재작성 (배지, 기능 목록, 명령어·옵션·단축키 표)
 - [x] 커밋 메시지에서 `Co-Authored-By: Claude` / `Claude-Session:` 트레일러 제거 후 force push
-- [ ] **내 실제 `~/.claude`에 `csm init` 적용** — 지금까지 샌드박스에서만 테스트했고 진짜 settings.json은 안 건드렸음. 적용하면 `/persist` 실사용 가능. 백업은 `settings.json.csm-backup`으로 자동 생성됨.
+- [x] **실제 `~/.claude`에 `csm init` 적용 완료** — `npm link`로 `csm`을 PATH에 올린 뒤 적용했다. 기존 훅(Stop 3, PostToolUse 1, PreToolUse 4, SessionStart 2)이 전부 바이트 단위로 보존됐음을 확인했고, 백업은 `~/.claude/settings.json.csm-backup`에 있다. 훅은 새 세션부터 적용되므로 이번 세션은 아직 `via mtime`으로 뜬다. 주의: 훅이 이 저장소의 절대 경로를 가리키므로 저장소를 옮기면 훅이 죽는다(그 경우 `csm doctor`가 알려준다).
 
 ### B. 첫 릴리즈까지
 
