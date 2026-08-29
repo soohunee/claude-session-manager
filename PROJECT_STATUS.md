@@ -1,6 +1,7 @@
 # csm 작업 현황 및 다음 할 일
 
-> 작성일 2026-08-29 · v0.1.0 · 로컬 커밋 `efaaa92`까지 완료, **아직 푸시 안 함**
+> 작성일 2026-08-29 · v0.1.0 · GitHub 공개 레포 생성 완료, CI 초록불. **npm 배포 전**
+> https://github.com/soohunee/claude-session-manager
 
 ---
 
@@ -17,7 +18,7 @@
 | 훅 자동 설치/제거 | 완료 (샌드박스 검증, 실환경 미적용) |
 | 테스트 | 11개 전부 통과 |
 | README / LICENSE / CI | 완료 |
-| GitHub 레포 | **미생성** |
+| GitHub 레포 | 완료 (public, CI 8개 매트릭스 전부 통과) |
 | npm publish | **미배포** |
 
 의존성 0개, Node 코드 1,420줄, 패키지 16.5KB.
@@ -124,16 +125,18 @@ claude-session-manager/
 
 ## 6. 다음에 할 일
 
-### A. 지금 바로 (배포 전 결정 필요)
+### A. 지금 바로
 
+- [x] **GitHub 레포 생성** — public으로 생성 완료: https://github.com/soohunee/claude-session-manager
+- [x] `package.json`에 `repository`, `bugs`, `homepage`, `author` 필드 추가
+- [x] README를 오픈소스 관례에 맞게 재작성 (배지, 기능 목록, 명령어·옵션·단축키 표)
+- [x] 커밋 메시지에서 `Co-Authored-By: Claude` / `Claude-Session:` 트레일러 제거 후 force push
 - [ ] **내 실제 `~/.claude`에 `csm init` 적용** — 지금까지 샌드박스에서만 테스트했고 진짜 settings.json은 안 건드렸음. 적용하면 `/persist` 실사용 가능. 백업은 `settings.json.csm-backup`으로 자동 생성됨.
-- [ ] **GitHub 레포 public / private 결정** → `gh repo create soohunee/claude-session-manager --public --source=. --push`
-- [ ] `package.json`에 `repository`, `bugs`, `homepage`, `author` 필드 추가 (레포 URL 확정 후)
 
 ### B. 첫 릴리즈까지
 
+- [x] CI 초록불 확인 (Ubuntu/macOS × Node 18/20/22/24, actions v5로 상향)
 - [ ] npm 이름 선점 확인 후 `npm publish` (npm login 필요)
-- [ ] CI 초록불 확인 (Ubuntu/macOS × Node 18/20/22/24)
 - [ ] README에 데모 GIF 추가 — 피커에서 검색하고 엔터 눌러 resume되는 10초 분량. `vhs`나 `asciinema`로 녹화. **이게 스타 수를 가장 크게 좌우함.**
 - [ ] `v0.1.0` 태그 + GitHub Release
 
