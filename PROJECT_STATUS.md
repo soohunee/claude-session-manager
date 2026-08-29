@@ -1,7 +1,7 @@
 # csm 작업 현황 및 다음 할 일
 
-> 작성일 2026-08-29 · v0.1.0 · GitHub 공개 레포 생성 완료, CI 초록불. **npm 배포 전**
-> https://github.com/soohunee/claude-session-manager
+> 작성일 2026-08-29 · **v0.1.0 배포 완료**
+> npm: https://www.npmjs.com/package/claude-sessions-cli · GitHub: https://github.com/soohunee/claude-session-manager
 
 ---
 
@@ -19,7 +19,7 @@
 | 테스트 | 11개 전부 통과 |
 | README / LICENSE / CI | 완료 |
 | GitHub 레포 | 완료 (public, CI 8개 매트릭스 전부 통과) |
-| npm publish | **미배포** |
+| npm publish | 완료 (`claude-sessions-cli@0.1.0`) |
 
 의존성 0개, Node 코드 1,420줄, 패키지 16.5KB.
 
@@ -136,9 +136,10 @@ claude-session-manager/
 ### B. 첫 릴리즈까지
 
 - [x] CI 초록불 확인 (Ubuntu/macOS × Node 18/20/22/24, actions v5로 상향)
-- [ ] npm 이름 선점 확인 후 `npm publish` (npm login 필요)
+- [x] **`npm publish` 완료** — `claude-sessions-cli@0.1.0`. 계정은 `cold.brew`. 첫 시도에서 `E403`이 났는데, 원인은 패키지가 아니라 npm 정책이었다. 게시에는 2FA 또는 우회 권한이 붙은 세분화 토큰이 필요한데 새로 만든 계정은 2FA가 꺼져 있었다. 브라우저 인증 플로우로 통과했다.
 - [ ] README에 데모 GIF 추가 — 피커에서 검색하고 엔터 눌러 resume되는 10초 분량. `vhs`나 `asciinema`로 녹화. **이게 스타 수를 가장 크게 좌우함.**
-- [ ] `v0.1.0` 태그 + GitHub Release
+- [x] `v0.1.0` 태그 + GitHub Release 생성
+- [x] **전역 설치를 개발용 링크에서 배포판으로 전환** — `npm unlink -g` 후 `npm install -g claude-sessions-cli`, 그리고 `csm init` 재실행으로 훅 3개가 저장소 경로에서 설치 경로로 **중복 없이 제자리 교체**됐다(`~ hooks updated`). 이후 `csm doctor`가 `via mtime`에서 **`via hook`**으로 바뀌어, 설치한 훅이 실제로 발동하고 있음이 확인됐다.
 
 ### C. 기능 백로그 (우선순위 순)
 
