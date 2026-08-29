@@ -46,6 +46,7 @@ ${c.bold('USAGE')}
 
 ${c.bold('OPTIONS')}
   -t, --tag <tag>             Only sessions carrying this tag (repeatable)
+      --tagged                Only sessions carrying at least one tag
   -d, --dir [path]            Only sessions from this directory (default: cwd)
   -n, --limit <n>             Cap the number of sessions shown
   -a, --all                   Include expired sessions with no transcript left
@@ -70,6 +71,7 @@ ${c.bold('PICKER KEYS')}
 
 ${c.bold('EXAMPLES')}
   csm                         Browse everything, fuzzy-search, hit enter to resume
+  csm --tagged                Everything you have tagged, whatever the tag
   csm -t billing              Just the sessions you tagged #billing
   csm resume billing          Resume the newest #billing-matching session
   csm resume billing --remote Resume it with Remote Control enabled
@@ -79,8 +81,8 @@ ${c.bold('EXAMPLES')}
 Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
 
-function parseArgs(argv) {
-  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, sort: 'time', preview: false, mode: 'resume', print: false };
+export function parseArgs(argv) {
+  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false };
   const rest = [];
   const passthrough = [];
   let i = 0;
@@ -89,7 +91,16 @@ function parseArgs(argv) {
     if (a === '--') {
       passthrough.push(...argv.slice(i + 1));
       break;
-    } else if (a === '-t' || a === '--tag') opts.tags.push(normalizeTag(argv[++i] || ''));
+    } else if (a === '-t' || a === '--tag') {
+      const value = argv[i + 1];
+      // Without this an empty tag silently matches nothing, which reads as
+      // "you have no tagged sessions" when in fact the flag was incomplete.
+      if (!value || value.startsWith('-')) {
+        console.error(c.red(`${a} needs a tag name. Use --tagged for every tagged session.`));
+        process.exit(1);
+      }
+      opts.tags.push(normalizeTag(argv[++i]));
+    }
     else if (a === '-d' || a === '--dir') {
       const next = argv[i + 1];
       opts.dir = next && !next.startsWith('-') ? path.resolve(argv[++i]) : process.cwd();
@@ -99,6 +110,7 @@ function parseArgs(argv) {
     else if (a === '--session') opts.session = argv[++i];
     else if (a === '--no-archive') opts.archive = false;
     else if (a === '--refresh') opts.refresh = true;
+    else if (a === '--tagged') opts.tagged = true;
     else if (a === '-s' || a === '--sort') {
       const mode = argv[++i];
       if (!SORT_MODES.includes(mode)) {
@@ -117,9 +129,10 @@ function parseArgs(argv) {
   return { opts, rest, passthrough };
 }
 
-function selectSessions(opts, query) {
+export function selectSessions(opts, query) {
   let sessions = scanSessions({ refresh: opts.refresh });
   if (!opts.all) sessions = sessions.filter((s) => s.resumable);
+  if (opts.tagged) sessions = sessions.filter((s) => s.tags.length > 0);
   if (opts.tags.length) sessions = sessions.filter((s) => opts.tags.every((t) => s.tags.includes(t)));
   if (opts.dir) sessions = sessions.filter((s) => s.cwd === opts.dir);
   if (query) {
@@ -458,6 +471,7 @@ async function cmdPick(opts, rest, passthrough) {
     return;
   }
   const titleBits = ['Claude sessions'];
+  if (opts.tagged && !opts.tags.length) titleBits.push('tagged');
   if (opts.tags.length) titleBits.push(opts.tags.map((t) => '#' + t).join(' '));
   if (opts.dir) titleBits.push(homeShort(opts.dir));
   const subtitle =

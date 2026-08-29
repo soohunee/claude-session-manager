@@ -14,6 +14,7 @@ const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
+const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
 const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
@@ -300,6 +301,37 @@ test('staleHooks reports a hook whose pinned interpreter is gone', () => {
   assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).hooks.SessionEnd.length, 1);
 
   uninstallHooks();
+});
+
+test('--tagged selects every tagged session, --tag selects one', () => {
+  writeTranscript('filter-a', fixtureLines('Alpha', 'alpha prompt'));
+  writeTranscript('filter-b', fixtureLines('Beta', 'beta prompt'));
+  writeTranscript('filter-c', fixtureLines('Gamma', 'gamma prompt'));
+  addTags('filter-a', ['billing']);
+  addTags('filter-b', ['scratch']);
+
+  const ids = (opts) =>
+    selectSessions({ ...parseArgs([]).opts, ...opts, refresh: true }, null)
+      .map((s) => s.id)
+      .filter((id) => id.startsWith('filter-'))
+      .sort();
+
+  assert.deepEqual(ids({}), ['filter-a', 'filter-b', 'filter-c'], 'no filter shows everything');
+  assert.deepEqual(ids({ tagged: true }), ['filter-a', 'filter-b'], 'any tag, whichever it is');
+  assert.deepEqual(ids({ tags: ['billing'] }), ['filter-a']);
+  // Combining the two narrows rather than widens.
+  assert.deepEqual(ids({ tagged: true, tags: ['billing'] }), ['filter-a']);
+  assert.deepEqual(ids({ tags: ['billing', 'scratch'] }), [], 'repeated --tag is AND');
+
+  removeTags('filter-a', []);
+  removeTags('filter-b', []);
+  assert.deepEqual(ids({ tagged: true }), [], 'nothing is tagged once the tags are cleared');
+});
+
+test('parseArgs reads the tag filters', () => {
+  assert.equal(parseArgs(['--tagged']).opts.tagged, true);
+  assert.equal(parseArgs([]).opts.tagged, false);
+  assert.deepEqual(parseArgs(['-t', 'Billing', '--tag', 'ops']).opts.tags, ['billing', 'ops']);
 });
 
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));

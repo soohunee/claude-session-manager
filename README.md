@@ -117,6 +117,7 @@ Requires Node.js 18 or newer. Tested on macOS and Linux against Claude Code 2.x.
 
 ```bash
 csm                       # browse every session, fuzzy-search, Enter to resume
+csm --tagged              # everything you have tagged, whatever the tag
 csm -t billing            # only sessions tagged #billing
 csm resume billing        # resume the newest match without opening the picker
 csm resume billing --remote          # ...with Remote Control, to continue on mobile
@@ -149,7 +150,8 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 
 | Option | Description |
 | --- | --- |
-| `-t, --tag <tag>` | Only sessions carrying this tag (repeatable) |
+| `-t, --tag <tag>` | Only sessions carrying this tag (repeatable, AND) |
+| `--tagged` | Only sessions carrying at least one tag |
 | `-d, --dir [path]` | Only sessions from this directory (default: cwd) |
 | `-n, --limit <n>` | Cap the number of sessions shown |
 | `-a, --all` | Include expired sessions with no transcript left |
