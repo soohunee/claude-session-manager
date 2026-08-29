@@ -1,0 +1,81 @@
+name: Release
+
+# master only ever receives release-ready commits, so a push to it is the
+# release trigger. Everything else lands on develop.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Run the test suite
+        run: npm test
+
+      - name: Read the version
+        id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Pushing master again without bumping must not fail the build, so every
+      # step below is skipped when this version has already gone out.
+      - name: Has this version been released?
+        id: check
+        run: |
+          if git rev-parse "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v${{ steps.v.outputs.version }} already exists — nothing to do."
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Auth is the likeliest thing to be wrong, and it is the one failure that
+      # must not happen after a tag has been pushed. Check it before mutating
+      # anything, so a missing or expired NPM_TOKEN stops a clean run.
+      - name: Check the npm credentials
+        if: steps.check.outputs.released == 'false'
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is not set. Add a granular access token with"
+            echo "::error::'Bypass 2FA' under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to npm
+        if: steps.check.outputs.released == 'false'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release
+        if: steps.check.outputs.released == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.v.outputs.version }}" -m "csm v${{ steps.v.outputs.version }}"
+          git push origin "v${{ steps.v.outputs.version }}"
+
+      - name: Create the GitHub Release
+        if: steps.check.outputs.released == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" \
+            --title "v${{ steps.v.outputs.version }}" \
+            --generate-notes
