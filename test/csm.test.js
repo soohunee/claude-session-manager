@@ -13,9 +13,10 @@ const { width, truncate, pad, relTime } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
+const { searchTranscript, snippet } = await import('../src/search.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
-const { archiveSession, restoreSession, isArchived } = await import('../src/archive.js');
-const { installHooks, uninstallHooks, hooksInstalled } = await import('../src/install.js');
+const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
+const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
 
 const CWD = '/tmp/csm-fixture-project';
 
@@ -152,21 +153,153 @@ test('installHooks preserves existing hooks and is idempotent', () => {
   fs.writeFileSync(settings, JSON.stringify(original));
 
   const first = installHooks();
-  assert.deepEqual(first.added, ['SessionStart', 'UserPromptSubmit']);
+  assert.deepEqual(first.added, ['SessionStart', 'UserPromptSubmit', 'SessionEnd']);
   const after = JSON.parse(fs.readFileSync(settings, 'utf8'));
   assert.equal(after.model, 'opus', 'unrelated settings are untouched');
   assert.deepEqual(after.hooks.Stop, original.hooks.Stop, 'unrelated hook events are untouched');
   assert.equal(after.hooks.SessionStart[0].hooks[0].command, 'other.sh', 'existing entries keep their position');
   assert.equal(after.hooks.SessionStart.length, 2);
 
-  assert.deepEqual(installHooks().added, [], 'installing twice adds nothing');
-  assert.deepEqual(hooksInstalled(), ['SessionStart', 'UserPromptSubmit']);
+  const second = installHooks();
+  assert.deepEqual(second.added, [], 'installing twice adds nothing');
+  assert.deepEqual(second.updated, [], 'installing twice rewrites nothing');
+  assert.deepEqual(hooksInstalled(), ['SessionStart', 'UserPromptSubmit', 'SessionEnd']);
+
+  // The guard has to sit before the marker comment, or the shell swallows it
+  // and a csm failure could block the user's prompt.
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'SessionEnd']) {
+    const ours = JSON.parse(fs.readFileSync(settings, 'utf8'))
+      .hooks[event].flatMap((g) => g.hooks)
+      .find((h) => h.command.includes('csm-hook'));
+    assert.match(ours.command, /\|\| true #/, `${event} guard runs outside the comment`);
+  }
 
   uninstallHooks();
   const cleaned = JSON.parse(fs.readFileSync(settings, 'utf8'));
   assert.deepEqual(cleaned.hooks.Stop, original.hooks.Stop);
   assert.deepEqual(cleaned.hooks.SessionStart, original.hooks.SessionStart, 'uninstall restores the original shape');
   assert.equal(cleaned.hooks.UserPromptSubmit, undefined, 'an emptied event is removed entirely');
+  assert.equal(cleaned.hooks.SessionEnd, undefined);
+});
+
+test('installHooks repairs a hook left behind by an older version', () => {
+  const settings = path.join(root, 'settings.json');
+  fs.writeFileSync(
+    settings,
+    JSON.stringify({
+      hooks: {
+        SessionStart: [
+          // The 0.1.0 shape: the guard is stranded inside the comment.
+          { matcher: '', hooks: [{ type: 'command', command: 'node csm.js hook-stamp # csm-hook-stamp || true' }] },
+        ],
+      },
+    })
+  );
+
+  const res = installHooks();
+  assert.deepEqual(res.updated, ['SessionStart'], 'the stale command is rewritten in place');
+  assert.deepEqual(res.added, ['UserPromptSubmit', 'SessionEnd']);
+  const after = JSON.parse(fs.readFileSync(settings, 'utf8'));
+  assert.equal(after.hooks.SessionStart.length, 1, 'no duplicate entry is appended');
+  assert.match(after.hooks.SessionStart[0].hooks[0].command, /\|\| true # csm-hook$/);
+
+  uninstallHooks();
+});
+
+test('the SessionEnd hook re-archives a tagged session, and ignores untagged ones', () => {
+  const file = writeTranscript('end-hook', fixtureLines('Tagged work', 'first prompt'));
+
+  // Untagged: nothing is written, because csm only keeps what you asked it to.
+  assert.equal(hookEnd({ session_id: 'end-hook', transcript_path: file }), false);
+  assert.equal(isArchived('end-hook'), false);
+
+  addTags('end-hook', ['keep']);
+  assert.equal(hookEnd({ session_id: 'end-hook', transcript_path: file }), true);
+  const snapshot = fs.readFileSync(archivePathFor('end-hook'), 'utf8');
+
+  // Messages sent after the tag land in the archive when the session closes,
+  // which is the whole point: tagging alone only captures a snapshot.
+  fs.appendFileSync(file, JSON.stringify({ type: 'user', cwd: CWD, timestamp: '2026-01-02T00:00:00.000Z', message: { role: 'user', content: 'said after tagging' } }) + '\n');
+  assert.equal(hookEnd({ session_id: 'end-hook', transcript_path: file }), true);
+  const updated = fs.readFileSync(archivePathFor('end-hook'), 'utf8');
+  assert.equal(updated.length > snapshot.length, true);
+  assert.match(updated, /said after tagging/);
+
+  // With no usable transcript path it falls back to the encoded project dir.
+  assert.equal(hookEnd({ session_id: 'end-hook', cwd: CWD }), true);
+  assert.equal(hookEnd({ session_id: 'end-hook', cwd: '/nowhere' }), false);
+  assert.equal(hookEnd({}), false);
+
+  removeTags('end-hook', []);
+});
+
+test('searchTranscript matches visible text and ignores metadata and noise', () => {
+  const file = writeTranscript('search-1', [
+    { type: 'user', timestamp: '2026-01-01T00:00:00.000Z', message: { role: 'user', content: 'how do we handle the RATE limit?' } },
+    { type: 'assistant', timestamp: '2026-01-01T00:01:00.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Back off and retry the rate limit.' }] } },
+    { type: 'user', isSidechain: true, message: { role: 'user', content: 'rate limit in a subagent' } },
+    // The needle appears only in a field the reader never sees.
+    { type: 'assistant', gitBranch: 'rate-limit-fix', timestamp: '2026-01-01T00:02:00.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'unrelated reply' }] } },
+  ]);
+
+  const hits = searchTranscript(file, 'rate limit', { limit: 10 });
+  assert.deepEqual(hits.map((h) => h.role), ['user', 'assistant'], 'sidechains and metadata-only lines are skipped');
+  assert.match(hits[0].text, /RATE limit/, 'matching is case-insensitive');
+  assert.equal(hits[0].text.slice(hits[0].at, hits[0].at + hits[0].length).toLowerCase(), 'rate limit');
+
+  assert.deepEqual(searchTranscript(file, 'rate limit', { limit: 1 }).length, 1);
+  assert.deepEqual(searchTranscript(file, 'nothing here at all'), []);
+  assert.deepEqual(searchTranscript(path.join(root, 'missing.jsonl'), 'x'), []);
+});
+
+test('searchTranscript still finds a needle that JSON encoding would escape', () => {
+  const file = writeTranscript('search-2', [
+    { type: 'user', timestamp: '2026-01-01T00:00:00.000Z', message: { role: 'user', content: 'he said "ship it" yesterday' } },
+  ]);
+  // A quoted needle cannot be found by scanning the raw line, so the fast path
+  // has to step aside rather than report no match.
+  const hits = searchTranscript(file, '"ship it"');
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].text, /ship it/);
+});
+
+test('snippet centres the match and measures the window in terminal cells', () => {
+  const long = 'x'.repeat(200) + 'NEEDLE' + 'y'.repeat(200);
+  const win = snippet({ text: long, at: 200, length: 6 }, 40);
+  assert.equal(width(win.text) <= 42, true, 'the window respects its budget');
+  assert.equal(win.text.slice(win.at, win.at + win.length), 'NEEDLE');
+  assert.equal(win.text.startsWith('…') && win.text.endsWith('…'), true);
+
+  // Wide characters cost two cells each, so half as many of them fit.
+  const korean = '한'.repeat(100) + 'NEEDLE' + '글'.repeat(100);
+  const wide = snippet({ text: korean, at: 100, length: 6 }, 40);
+  assert.equal(width(wide.text) <= 42, true);
+  assert.equal(wide.text.slice(wide.at, wide.at + wide.length), 'NEEDLE');
+
+  // A short line needs no window at all and keeps its exact text.
+  const whole = snippet({ text: 'just NEEDLE here', at: 5, length: 6 }, 80);
+  assert.equal(whole.text, 'just NEEDLE here');
+  assert.equal(whole.text.slice(whole.at, whole.at + whole.length), 'NEEDLE');
+});
+
+test('staleHooks reports a hook whose pinned interpreter is gone', () => {
+  const settings = path.join(root, 'settings.json');
+  fs.writeFileSync(settings, '{}');
+  installHooks();
+  assert.deepEqual(staleHooks(), [], 'a fresh install points at a real interpreter');
+
+  const broken = JSON.parse(fs.readFileSync(settings, 'utf8'));
+  broken.hooks.SessionEnd[0].hooks[0].command =
+    '"/gone/bin/node" "/x/csm.js" hook-end || true # csm-hook';
+  fs.writeFileSync(settings, JSON.stringify(broken));
+  assert.deepEqual(staleHooks(), [{ event: 'SessionEnd', interpreter: '/gone/bin/node' }]);
+
+  // init repairs it in place rather than appending a second entry.
+  assert.deepEqual(installHooks().updated, ['SessionEnd']);
+  assert.deepEqual(staleHooks(), []);
+  assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).hooks.SessionEnd.length, 1);
+
+  uninstallHooks();
 });
 
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));

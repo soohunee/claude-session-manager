@@ -3,19 +3,32 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { settingsFile, commandsDir, currentDir, projectsDir, encodeProjectPath } from './paths.js';
-import { readJson, writeJson } from './store.js';
+import { readJson, writeJson, tagsFor } from './store.js';
+import { archiveSession } from './archive.js';
 
-const MARKER = 'csm-hook-stamp';
-const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit'];
+// Deliberately a prefix of the older `csm-hook-stamp` marker, so hooks written
+// by an earlier version are still recognised and can be repaired or removed.
+const MARKER = 'csm-hook';
+
+const HOOK_SPECS = [
+  { event: 'SessionStart', sub: 'hook-stamp' },
+  { event: 'UserPromptSubmit', sub: 'hook-stamp' },
+  // Re-archives a tagged session as it closes, so the archive holds the whole
+  // conversation rather than a snapshot from the moment it was tagged.
+  { event: 'SessionEnd', sub: 'hook-end' },
+];
+const HOOK_EVENTS = HOOK_SPECS.map((h) => h.event);
 
 function binPath() {
   return path.resolve(fileURLToPath(new URL('../bin/csm.js', import.meta.url)));
 }
 
-function hookCommand() {
-  // Quoted so a space in the install path can't split the command, and
-  // `|| true` so a csm failure can never block the user's prompt.
-  return `"${process.execPath}" "${binPath()}" hook-stamp # ${MARKER}\n`.trim() + ' || true';
+function hookCommand(sub) {
+  // Quoted so a space in the install path can't split the command. `|| true`
+  // has to come *before* the marker: everything after `#` is a comment, so a
+  // guard written behind it would never run and a csm failure could block the
+  // user's prompt.
+  return `"${process.execPath}" "${binPath()}" ${sub} || true # ${MARKER}`;
 }
 
 function hasOurHook(entries) {
@@ -32,17 +45,36 @@ export function installHooks() {
   }
   settings.hooks = settings.hooks || {};
   const added = [];
-  for (const event of HOOK_EVENTS) {
+  const updated = [];
+  for (const { event, sub } of HOOK_SPECS) {
     settings.hooks[event] = settings.hooks[event] || [];
-    if (hasOurHook(settings.hooks[event])) continue;
+    const want = hookCommand(sub);
+    // Rewrite a stale command in place rather than skipping it, so an install
+    // from an older version is repaired instead of left half-broken.
+    let found = false;
+    for (const group of settings.hooks[event]) {
+      for (const h of group.hooks || []) {
+        if (typeof h.command !== 'string' || !h.command.includes(MARKER)) continue;
+        found = true;
+        if (h.command !== want) {
+          h.command = want;
+          if (!updated.includes(event)) updated.push(event);
+        }
+      }
+    }
+    if (found) continue;
     settings.hooks[event].push({
       matcher: '',
-      hooks: [{ type: 'command', command: hookCommand() }],
+      hooks: [{ type: 'command', command: want }],
     });
     added.push(event);
   }
-  if (added.length) writeJson(file, settings);
-  return { added, backup: fs.existsSync(file + '.csm-backup') ? file + '.csm-backup' : null };
+  if (added.length || updated.length) writeJson(file, settings);
+  return {
+    added,
+    updated,
+    backup: fs.existsSync(file + '.csm-backup') ? file + '.csm-backup' : null,
+  };
 }
 
 export function uninstallHooks() {
@@ -71,6 +103,31 @@ export function hooksInstalled() {
   const settings = readJson(settingsFile(), null);
   if (!settings?.hooks) return [];
   return HOOK_EVENTS.filter((e) => hasOurHook(settings.hooks[e]));
+}
+
+/**
+ * Installed hooks that can no longer run.
+ *
+ * The command pins the absolute path of the interpreter that installed it,
+ * because a hook runs with a minimal environment and cannot count on `node`
+ * being on PATH. The cost is that a version manager retiring that build leaves
+ * a hook that silently does nothing, so `doctor` checks the path still exists.
+ */
+export function staleHooks() {
+  const settings = readJson(settingsFile(), null);
+  if (!settings?.hooks) return [];
+  const stale = [];
+  for (const event of HOOK_EVENTS) {
+    for (const group of settings.hooks[event] || []) {
+      for (const h of group.hooks || []) {
+        const cmd = String(h.command || '');
+        if (!cmd.includes(MARKER)) continue;
+        const interpreter = cmd.match(/^"([^"]+)"/)?.[1];
+        if (interpreter && !fs.existsSync(interpreter)) stale.push({ event, interpreter });
+      }
+    }
+  }
+  return stale;
 }
 
 const PERSIST_COMMAND = `---
@@ -132,6 +189,27 @@ export function hookStamp(payload) {
     updatedAt: new Date().toISOString(),
   });
   return true;
+}
+
+/**
+ * Archive a tagged session as it ends.
+ *
+ * Tagging archives a snapshot, so without this every message sent after the
+ * tag would be missing from the copy that outlives Claude Code's cleanup.
+ * Untagged sessions are left alone — csm only keeps what you asked it to.
+ */
+export function hookEnd(payload) {
+  const sessionId = payload.session_id || payload.sessionId;
+  if (!sessionId || !tagsFor(sessionId).length) return false;
+
+  let file = payload.transcript_path || null;
+  if (!file || !fs.existsSync(file)) {
+    const cwd = payload.cwd || process.cwd();
+    const guess = path.join(projectsDir(), encodeProjectPath(cwd), sessionId + '.jsonl');
+    file = fs.existsSync(guess) ? guess : null;
+  }
+  if (!file) return false;
+  return archiveSession({ id: sessionId, file }).ok === true;
 }
 
 /**

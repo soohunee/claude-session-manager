@@ -9,14 +9,17 @@ import {
   installHooks,
   uninstallHooks,
   hooksInstalled,
+  staleHooks,
   installCommand,
   uninstallCommand,
   commandInstalled,
   hookStamp,
+  hookEnd,
   resolveCurrentSession,
 } from './install.js';
 import { claudeHome, projectsDir, settingsFile } from './paths.js';
 import { pick } from './tui.js';
+import { searchTranscript, snippet } from './search.js';
 import { c, pad, truncate, relTime, plural } from './format.js';
 
 const pkg = JSON.parse(
@@ -31,6 +34,7 @@ ${c.bold('USAGE')}
   csm [query]                 Interactive picker over every session (default)
   csm ls [query]              Print sessions instead of opening the picker
   csm resume <id|query>       Resume directly, skipping the picker
+  csm search <text>           Search what was actually said, across every session
   csm tag <tag...>            Tag the session in this directory and archive it
   csm untag <tag...>          Remove tags (omit tags to clear the session)
   csm tags                    List every tag with its session count
@@ -69,6 +73,7 @@ ${c.bold('EXAMPLES')}
   csm -t billing              Just the sessions you tagged #billing
   csm resume billing          Resume the newest #billing-matching session
   csm resume billing --remote Resume it with Remote Control enabled
+  csm search "rate limit"     Find the conversation where you discussed it
   csm ls --dir --json         Sessions for this directory as JSON
 
 Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
@@ -324,11 +329,9 @@ function cmdInit() {
   const hooks = installHooks();
   const cmd = installCommand();
   console.log(c.bold('csm is wired up.'));
-  console.log(
-    hooks.added.length
-      ? `  ${c.green('+')} hooks installed: ${hooks.added.join(', ')}`
-      : `  ${c.dim('=')} hooks already installed`
-  );
+  if (hooks.added.length) console.log(`  ${c.green('+')} hooks installed: ${hooks.added.join(', ')}`);
+  if (hooks.updated.length) console.log(`  ${c.green('~')} hooks updated: ${hooks.updated.join(', ')}`);
+  if (!hooks.added.length && !hooks.updated.length) console.log(`  ${c.dim('=')} hooks already up to date`);
   if (hooks.backup) console.log(c.dim(`      settings backed up to ${homeShort(hooks.backup)}`));
   console.log(`  ${c.green('+')} slash command: ${homeShort(cmd)}  ${c.dim('→ /persist <tag>')}`);
   console.log(c.dim('\nRestart Claude Code (or start a new session) for the hooks to take effect.'));
@@ -357,7 +360,15 @@ function cmdDoctor() {
   const ok = (b) => (b ? c.green('ok') : c.red('missing'));
   console.log(c.bold('csm doctor') + c.dim(` v${pkg.version}`));
   console.log(`  claude home     ${homeShort(claudeHome())} ${ok(fs.existsSync(projectsDir()))}`);
-  console.log(`  hooks           ${hooksInstalled().join(', ') || c.red('not installed')}`);
+  const stale = staleHooks();
+  console.log(
+    `  hooks           ${hooksInstalled().join(', ') || c.red('not installed')}` +
+      (stale.length ? c.red(`  (${stale.length} pointing at a missing interpreter)`) : '')
+  );
+  for (const h of stale) {
+    console.log(c.red(`    ${h.event} runs ${homeShort(h.interpreter)}, which no longer exists.`));
+    console.log(c.dim('    Re-run `csm init` to point it at the current one.'));
+  }
   console.log(`  /persist        ${ok(commandInstalled())}`);
   console.log(`  this directory  ${current ? `${current.id.slice(0, 8)} ${c.dim('via ' + current.via)}` : c.dim('no session found')}`);
   console.log('');
@@ -377,6 +388,58 @@ function cmdDoctor() {
       console.log(c.dim(`  To keep everything longer, set "cleanupPeriodDays" in ${homeShort(settingsFile())}.`));
     }
   }
+}
+
+function cmdSearch(opts, rest) {
+  const query = rest.join(' ');
+  if (!query) {
+    console.error(c.red('Usage: csm search <text>'));
+    process.exit(1);
+  }
+  // The limit caps sessions reported, not sessions searched, so `-n 5` still
+  // looks everywhere and just stops printing.
+  const sessions = selectSessions({ ...opts, limit: null }, null).filter((s) => s.file);
+  const results = [];
+  for (const s of sessions) {
+    const hits = searchTranscript(s.file, query, { limit: 3 });
+    if (hits.length) results.push({ session: s, hits });
+    if (opts.limit && results.length >= opts.limit) break;
+  }
+
+  if (opts.json) {
+    return console.log(
+      JSON.stringify(
+        results.map((r) => ({ ...r.session, matches: r.hits.map((h) => ({ role: h.role, text: h.text })) })),
+        null,
+        2
+      )
+    );
+  }
+  if (!results.length) {
+    console.log(c.dim(`Nothing matched ${JSON.stringify(query)} in ${plural(sessions.length, 'session')}.`));
+    return;
+  }
+
+  const cols = process.stdout.columns || 100;
+  for (const { session: s, hits } of results) {
+    const tags = (s.tags || []).map((t) => c.magenta('#' + t)).join(' ');
+    console.log(
+      `${c.dim(s.id.slice(0, 8))} ${c.dim(pad(relTime(s.updatedAt), 9))}${pad(s.label, 44)} ${c.blue(
+        truncate(homeShort(s.cwd), 30)
+      )} ${tags}`
+    );
+    for (const hit of hits) {
+      const win = snippet(hit, Math.max(30, cols - 8));
+      const marked =
+        win.text.slice(0, win.at) +
+        c.yellow(win.text.slice(win.at, win.at + win.length)) +
+        win.text.slice(win.at + win.length);
+      console.log(`   ${hit.role === 'user' ? c.cyan('›') : c.dim('‹')} ${marked}`);
+    }
+  }
+  console.log(
+    c.dim(`\n${plural(results.length, 'session')} matched · resume one with `) + c.cyan('csm resume <id>')
+  );
 }
 
 async function cmdPick(opts, rest, passthrough) {
@@ -422,12 +485,15 @@ export async function main(argv) {
   if (opts.version) return console.log(pkg.version);
   const command = rest[0];
 
-  if (command === 'hook-stamp') {
-    // Never fail loudly: a broken stamp must not block the user's prompt.
+  if (command === 'hook-stamp' || command === 'hook-end') {
+    // Never fail loudly: a hook must not block the user's prompt or delay a
+    // session closing, whatever state csm's own files are in.
     let raw = '';
     for await (const chunk of process.stdin) raw += chunk;
     try {
-      hookStamp(JSON.parse(raw || '{}'));
+      const payload = JSON.parse(raw || '{}');
+      if (command === 'hook-stamp') hookStamp(payload);
+      else hookEnd(payload);
     } catch {
       /* ignore */
     }
@@ -458,6 +524,8 @@ export async function main(argv) {
       if (opts.json) return console.log(JSON.stringify(sessions, null, 2));
       return printList(sessions);
     }
+    case 'search':
+      return cmdSearch(opts, rest.slice(1));
     case 'resume': {
       const sessions = selectSessions(opts, rest.slice(1).join(' ') || null);
       if (!sessions.length) {

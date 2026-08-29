@@ -51,8 +51,12 @@ directory.
 
 - **Cross-directory search.** One picker over every session on the machine, not
   just the current project.
+- **Full-text search.** `csm search "rate limit"` looks inside the conversations
+  themselves, not just their titles — for when you remember what was said but
+  not where.
 - **Archives that outlive cleanup.** Tagged sessions are copied out of Claude
-  Code's reach and restored in place when you resume them.
+  Code's reach and restored in place when you resume them, and refreshed each
+  time the session ends so the copy never falls behind.
 - **Tags from inside Claude Code.** `/persist billing` marks the running session
   without leaving it.
 - **Fuzzy interactive picker.** Type to filter, arrow keys to move, Enter to
@@ -85,8 +89,11 @@ history still mentions them. The transcripts themselves are gone, and no tool ca
 bring them back.
 
 So `csm` does more than label sessions: tagging one **copies its transcript into
-an archive** that cleanup does not touch. Months later `csm` puts the file back
-where Claude Code expects it and resumes the session as if nothing had happened.
+an archive** that cleanup does not touch, and the `SessionEnd` hook refreshes
+that copy every time you close the session, so it holds the whole conversation
+rather than a snapshot from the moment you tagged it. Months later `csm` puts
+the file back where Claude Code expects it and resumes the session as if nothing
+had happened.
 
 ## Installation
 
@@ -95,10 +102,11 @@ npm install -g claude-sessions-cli
 csm init
 ```
 
-`csm init` installs the `/persist` slash command and two hooks (`SessionStart`
-and `UserPromptSubmit`) that record which session is live in which directory. It
-merges into an existing `settings.json` and backs the file up first;
-`csm uninstall` reverses both changes.
+`csm init` installs the `/persist` slash command and three hooks. `SessionStart`
+and `UserPromptSubmit` record which session is live in which directory, so
+`/persist` always tags the session that ran it; `SessionEnd` re-archives a
+tagged session as it closes. It merges into an existing `settings.json` and
+backs the file up first; `csm uninstall` reverses every change.
 
 Try it without installing:
 
@@ -117,6 +125,7 @@ csm resume billing        # resume the newest match without opening the picker
 csm resume billing --remote          # ...with Remote Control, to continue on mobile
 csm resume billing --fork            # ...into a new session, leaving the original
 csm resume billing --print-cmd       # print the command instead of running it
+csm search "rate limit"   # find the conversation where you discussed it
 csm ls --sort dir         # group the listing by working directory
 csm ls --dir --json       # this directory's sessions as JSON
 csm resume billing -- --model opus   # extra flags go straight to claude
@@ -129,6 +138,7 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `csm [query]` | Interactive picker over every session (default) |
 | `csm ls [query]` | Print sessions instead of opening the picker |
 | `csm resume <id\|query>` | Resume directly, skipping the picker |
+| `csm search <text>` | Search what was said, across every session |
 | `csm tag <tag...>` | Tag the session in this directory and archive it |
 | `csm untag <tag...>` | Remove tags (omit tags to clear the session) |
 | `csm tags` | List every tag with its session count |
@@ -230,6 +240,10 @@ To keep untagged sessions around longer, raise `cleanupPeriodDays` in
   run `csm init`. Without them csm falls back to the most recently written
   transcript in the current directory, which is right nearly always but not
   guaranteed when two sessions share one directory.
+- The hooks pin the absolute path of the Node build that installed them, since
+  a hook runs with a minimal environment and cannot rely on `node` being on
+  PATH. If a version manager later retires that build the hooks stop doing
+  anything; `csm doctor` reports it and `csm init` repairs them in place.
 - csm reads Claude Code's on-disk formats, which are not a public API. A Claude
   Code update could change them; parsing failures are skipped quietly and
   `csm doctor` is the place to look when numbers seem wrong.
