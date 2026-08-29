@@ -1,6 +1,6 @@
 {
   "name": "claude-sessions-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Find and resume any Claude Code session from anywhere - across every directory you've ever worked in. Tag the ones that matter and they survive Claude Code's 30-day cleanup.",
   "keywords": [
     "claude",
