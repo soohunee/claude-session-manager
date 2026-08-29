@@ -71,12 +71,8 @@ ${c.bold('OPTIONS')}
   -v, --version               Show version
 
 ${c.bold('PICKER KEYS')}
-  ↑↓ / ^p ^n                  Move            tab       Toggle the preview panel
-  enter                       Resume          ^r        Resume with Remote Control
-  ^y                          Print command   ^f        Resume as a fork
-  ^t / ^o / ^g                Sort by time / title / directory
-  ^a                          Show only tagged sessions (toggle)
-  ^u                          Clear query     esc       Quit
+  The picker lists its own keys on screen, and ${c.cyan('?')} opens the full set.
+  Bare letters act on the highlighted session; ${c.cyan('/')} starts filtering.
 
 ${c.bold('EXAMPLES')}
   csm                         Browse everything, fuzzy-search, hit enter to resume
@@ -677,15 +673,18 @@ async function cmdPick(opts, rest, passthrough) {
     console.log(c.dim('No sessions found. Have you used Claude Code in this account yet?'));
     return;
   }
-  const titleBits = ['Claude sessions'];
-  if (opts.tagged && !opts.tags.length) titleBits.push('tagged');
-  if (opts.tags.length) titleBits.push(opts.tags.map((t) => '#' + t).join(' '));
-  if (opts.dir) titleBits.push(homeShort(opts.dir));
+  // Only what narrows the view goes in the header; naming the tool twice would
+  // spend a line of chrome saying nothing.
+  const scope = [];
+  if (opts.tags.length) scope.push(opts.tags.map((t) => '#' + t).join(' '));
+  if (opts.dir) scope.push(homeShort(opts.dir));
+  if (opts.all) scope.push('including expired');
   const subtitle =
     `${plural(sessions.length, 'session')} shown` +
     (expired && !opts.all ? ` · ${expired} expired, transcript gone (-a to list)` : '');
   const chosen = await pick(pool, {
-    title: titleBits.join('  '),
+    scope: scope.join('  '),
+    version: pkg.version,
     subtitle,
     query,
     preview: opts.preview,

@@ -13,6 +13,7 @@ const { width, truncate, pad, relTime } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
+const { layoutMenu, compactMenu, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
 const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
@@ -498,4 +499,45 @@ test('parseArgs reads the derive flags', () => {
   assert.equal(opts.fast, true);
   assert.equal(opts.note, 'keep going');
   assert.equal(opts.model, 'haiku');
+});
+
+test('width and truncate ignore colour escapes', () => {
+  const red = '\u001b[31m';
+  const reset = '\u001b[0m';
+  assert.equal(width(red + 'abcde' + reset), 5);
+  // Cutting a coloured string must not count the escapes as visible cells, or a
+  // painted line disappears long before the edge of the terminal.
+  assert.equal(width(truncate(red + 'abcdefghij' + reset, 5)), 5);
+  // …and it must close the colour it opened.
+  assert.equal(truncate(red + 'abcdefghij' + reset, 5).endsWith(reset), true);
+  assert.equal(truncate('abcdefghij', 5), 'abcd\u2026');
+});
+
+test('the key menu drops columns rather than truncating a label', () => {
+  const wide = layoutMenu(ACTIONS, 120);
+  const narrow = layoutMenu(ACTIONS, 30);
+  assert.ok(narrow.length > wide.length, 'a narrow menu should be taller');
+  for (const lines of [wide, narrow]) {
+    const text = lines.join('\n');
+    assert.equal(text.includes('\u2026'), false, 'no label may be cut');
+    for (const a of ACTIONS) assert.ok(text.includes(a.label), `${a.label} must stay listed`);
+  }
+});
+
+test('the key menu fits the width it is given', () => {
+  for (const avail of [120, 80, 60, 40, 20]) {
+    for (const line of layoutMenu(ACTIONS, avail)) {
+      assert.ok(width(line) <= avail, `a ${avail}-cell menu produced a ${width(line)}-cell line`);
+    }
+  }
+  assert.deepEqual(layoutMenu(ACTIONS, 4), [], 'too narrow for anything gives nothing');
+});
+
+test('the compact menu always says how to see the rest', () => {
+  for (const avail of [80, 40, 20, 8]) {
+    const line = compactMenu(ACTIONS, avail);
+    assert.match(line, /More keys/);
+    assert.equal(line.includes('\u2026'), false);
+  }
+  assert.ok(width(compactMenu(ACTIONS, 80)) > width(compactMenu(ACTIONS, 30)));
 });
