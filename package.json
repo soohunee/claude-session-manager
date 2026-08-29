@@ -11,16 +11,16 @@
     "anthropic",
     "developer-tools"
   ],
-  "homepage": "https://github.com/soohunee/claude-session-manager#readme",
+  "homepage": "https://github.com/coldbrew-p/claude-session-manager#readme",
   "bugs": {
-    "url": "https://github.com/soohunee/claude-session-manager/issues"
+    "url": "https://github.com/coldbrew-p/claude-session-manager/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/soohunee/claude-session-manager.git"
+    "url": "git+https://github.com/coldbrew-p/claude-session-manager.git"
   },
   "license": "MIT",
-  "author": "soohunee <tngjsdl036@gmail.com>",
+  "author": "coldbrew-p <tngjsdl036@gmail.com>",
   "type": "module",
   "bin": {
     "csm": "bin/csm.js"
