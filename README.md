@@ -259,8 +259,9 @@ node bin/csm.js --help
 export CLAUDE_CONFIG_DIR=/tmp/csm-sandbox   # experiment without touching ~/.claude
 ```
 
-Issues and pull requests are welcome. Please keep the dependency count at zero
-and add a test for anything that touches tags, archives, or `settings.json`.
+Issues and pull requests are welcome. Work is based on `develop`; `master` only
+holds released code. See [CONTRIBUTING.md](CONTRIBUTING.md) for the branching
+model and the release flow.
 
 ## License
 
