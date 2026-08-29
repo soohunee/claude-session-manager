@@ -46,7 +46,7 @@ ${c.bold('USAGE')}
 
 ${c.bold('OPTIONS')}
   -t, --tag <tag>             Only sessions carrying this tag (repeatable)
-      --tagged                Only sessions carrying at least one tag
+      --tagged                Only sessions carrying at least one tag (^a toggles)
   -d, --dir [path]            Only sessions from this directory (default: cwd)
   -n, --limit <n>             Cap the number of sessions shown
   -a, --all                   Include expired sessions with no transcript left
@@ -67,6 +67,7 @@ ${c.bold('PICKER KEYS')}
   enter                       Resume          ^r        Resume with Remote Control
   ^y                          Print command   ^f        Resume as a fork
   ^t / ^o / ^g                Sort by time / title / directory
+  ^a                          Show only tagged sessions (toggle)
   ^u                          Clear query     esc       Quit
 
 ${c.bold('EXAMPLES')}
@@ -457,7 +458,10 @@ function cmdSearch(opts, rest) {
 
 async function cmdPick(opts, rest, passthrough) {
   const query = rest.join(' ');
-  const sessions = selectSessions(opts, null);
+  // The picker owns the tag toggle, so it needs the untagged sessions too;
+  // filtering them out here would make ^a unable to bring them back.
+  const pool = selectSessions({ ...opts, tagged: false }, null);
+  const sessions = opts.tagged ? pool.filter((s) => s.tags.length > 0) : pool;
   // Count against everything on disk, not the filtered view, so the header
   // never claims there are no expired sessions when it simply hid them.
   const total = scanSessions();
@@ -477,12 +481,13 @@ async function cmdPick(opts, rest, passthrough) {
   const subtitle =
     `${plural(sessions.length, 'session')} shown` +
     (expired && !opts.all ? ` · ${expired} expired, transcript gone (-a to list)` : '');
-  const chosen = await pick(sessions, {
+  const chosen = await pick(pool, {
     title: titleBits.join('  '),
     subtitle,
     query,
     preview: opts.preview,
     sort: opts.sort,
+    tagged: opts.tagged,
   });
   if (!chosen) {
     if (!process.stdout.isTTY) printList(sessions);

@@ -114,7 +114,7 @@ function renderPreview(s, cols, height, cache) {
  * cancelled. Falls back to null when stdout is not a TTY — the caller prints a
  * plain list instead.
  */
-export function pick(sessions, { title = 'Claude sessions', subtitle = '', query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time' } = {}) {
+export function pick(sessions, { title = 'Claude sessions', subtitle = '', query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', tagged: taggedOnly = false } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -122,6 +122,7 @@ export function pick(sessions, { title = 'Claude sessions', subtitle = '', query
     let cursor = 0;
     let offset = 0;
     let showPreview = previewOn;
+    let onlyTagged = taggedOnly;
     let sort = sortMode;
     let ordered = sortSessions(sessions, sort);
     let filtered = ordered;
@@ -142,7 +143,8 @@ export function pick(sessions, { title = 'Claude sessions', subtitle = '', query
     };
 
     const applyFilter = () => {
-      filtered = query ? ordered.filter((s) => fuzzy(searchable(s), query)) : ordered;
+      const pool = onlyTagged ? ordered.filter((s) => (s.tags || []).length > 0) : ordered;
+      filtered = query ? pool.filter((s) => fuzzy(searchable(s), query)) : pool;
       if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
     };
 
@@ -185,11 +187,12 @@ export function pick(sessions, { title = 'Claude sessions', subtitle = '', query
       }
 
       const help = showPreview
-        ? '↑↓ move · enter resume · tab hide · ^r remote · ^f fork · ^y cmd · esc quit'
-        : '↑↓ move · enter resume · tab preview · ^r remote · ^f fork · ^y cmd · esc quit';
+        ? '↑↓ move · enter resume · tab hide · ^a tagged · ^r remote · ^f fork · ^y cmd · esc quit'
+        : '↑↓ move · enter resume · tab preview · ^a tagged · ^r remote · ^f fork · ^y cmd · esc quit';
+      const state = ` sort:${sort}` + (onlyTagged ? ' tagged' : '');
       lines.push(
-        c.dim(truncate(help, Math.max(20, cols - 24))) +
-          c.dim(` sort:${sort}`) +
+        c.dim(truncate(help, Math.max(20, cols - 24 - state.length))) +
+          (onlyTagged ? c.magenta(state) : c.dim(state)) +
           (filtered.length ? c.dim(`  [${cursor + 1}/${filtered.length}]`) : c.red('  no match'))
       );
       out.write(CLEAR + lines.join('\n'));
@@ -213,6 +216,15 @@ export function pick(sessions, { title = 'Claude sessions', subtitle = '', query
       if (key.ctrl && key.name === 'y') return act('print');
 
       if (key.name === 'tab') showPreview = !showPreview;
+      else if (key.ctrl && key.name === 'a') {
+        // Keep the highlighted session under the cursor when the pool changes.
+        const keep = filtered[cursor];
+        onlyTagged = !onlyTagged;
+        applyFilter();
+        const at = keep ? filtered.indexOf(keep) : -1;
+        cursor = at === -1 ? 0 : at;
+        offset = 0;
+      }
       else if (key.ctrl && key.name === 't') reorder('time');
       else if (key.ctrl && key.name === 'o') reorder('title');
       else if (key.ctrl && key.name === 'g') reorder('dir');
