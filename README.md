@@ -6,10 +6,10 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/claude-session-manager"><img alt="npm" src="https://img.shields.io/npm/v/claude-session-manager.svg"></a>
+  <a href="https://www.npmjs.com/package/claude-sessions-cli"><img alt="npm" src="https://img.shields.io/npm/v/claude-sessions-cli.svg"></a>
   <a href="https://github.com/soohunee/claude-session-manager/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/soohunee/claude-session-manager/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Node" src="https://img.shields.io/node/v/claude-session-manager.svg">
+  <img alt="Node" src="https://img.shields.io/node/v/claude-sessions-cli.svg">
   <img alt="Dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen.svg">
 </p>
 
@@ -75,7 +75,7 @@ where Claude Code expects it and resumes the session as if nothing had happened.
 ## Installation
 
 ```bash
-npm install -g claude-session-manager
+npm install -g claude-sessions-cli
 csm init
 ```
 
@@ -87,7 +87,7 @@ merges into an existing `settings.json` and backs the file up first;
 Try it without installing:
 
 ```bash
-npx claude-session-manager
+npx claude-sessions-cli
 ```
 
 Requires Node.js 18 or newer. Tested on macOS and Linux against Claude Code 2.x.

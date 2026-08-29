@@ -28,7 +28,7 @@
 ## 2. 만들어진 명령어 (`csm --help` 전문)
 
 ```
-csm — claude-session-manager v0.1.0
+csm — claude-sessions-cli v0.1.0
 
 Find and resume any Claude Code session, from any directory.
 

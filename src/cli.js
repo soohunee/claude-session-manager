@@ -23,7 +23,7 @@ const pkg = JSON.parse(
   fs.readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')
 );
 
-const HELP = `${c.bold('csm')} — claude-session-manager v${pkg.version}
+const HELP = `${c.bold('csm')} — claude-sessions-cli v${pkg.version}
 
 Find and resume any Claude Code session, from any directory.
 
