@@ -9,11 +9,17 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'csm-test-'));
 process.env.CLAUDE_CONFIG_DIR = root;
 
-const { width, truncate, pad, relTime } = await import('../src/format.js');
+// format.js decides once, at import, whether to emit colour. Under a test
+// runner stdout is not a terminal, which would leave every escape sequence out
+// and quietly turn the colour assertions below into assertions about nothing.
+process.stdout.isTTY = true;
+delete process.env.NO_COLOR;
+
+const { width, truncate, pad, relTime, c } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
-const { layoutMenu, compactMenu, ACTIONS } = await import('../src/tui.js');
+const { layoutMenu, compactMenu, menuFor, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
 const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
@@ -540,4 +546,33 @@ test('the compact menu always says how to see the rest', () => {
     assert.equal(line.includes('\u2026'), false);
   }
   assert.ok(width(compactMenu(ACTIONS, 80)) > width(compactMenu(ACTIONS, 30)));
+});
+
+test('the menu answers what can be done with the highlighted session', () => {
+  const live = menuFor({ resumable: true });
+  const expired = menuFor({ resumable: false });
+  const needsSession = ACTIONS.filter((a) => a.needs).map((a) => a.key);
+  assert.deepEqual(needsSession, ['enter', 'f', 'r', 'y']);
+
+  for (const a of live) assert.notEqual(a.enabled, false, `${a.key} should be live`);
+  for (const key of needsSession) {
+    assert.equal(expired.find((a) => a.key === key).enabled, false, `${key} needs a transcript`);
+  }
+  // Everything else keeps working on a session with nothing left to resume.
+  for (const a of expired.filter((a) => !needsSession.includes(a.key))) {
+    assert.notEqual(a.enabled, false, `${a.key} should not depend on the session`);
+  }
+  // An empty list still produces a readable menu rather than throwing.
+  assert.equal(menuFor(undefined).find((a) => a.key === 'enter').enabled, false);
+});
+
+test('a disabled key is dimmed as one piece', () => {
+  assert.notEqual(c.dim('x'), 'x', 'colour must be on for this to test anything');
+  const [line] = layoutMenu([{ key: 'x', label: 'Nope', enabled: false }], 40);
+  const [live] = layoutMenu([{ key: 'x', label: 'Yep' }], 40);
+  // Bold inside dim does not survive: the reset closing the bold closes the dim
+  // with it, and the label comes back at full brightness.
+  assert.equal(line, c.dim('x  Nope'));
+  assert.equal(line.includes('\u001b[1m'), false);
+  assert.equal(live, c.bold('x') + '  Yep');
 });

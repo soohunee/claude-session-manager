@@ -46,17 +46,34 @@ function searchable(s) {
  * overlay, and a key that is not in it does nothing.
  */
 export const ACTIONS = [
-  { key: 'enter', label: 'Resume', kind: 'act' },
-  { key: 'f', label: 'Fork', kind: 'act' },
-  { key: 'r', label: 'Remote', kind: 'act' },
-  { key: 'y', label: 'Print cmd', kind: 'act' },
-  { key: '/', label: 'Filter', kind: 'mode' },
-  { key: 's', label: 'Sort', kind: 'view' },
-  { key: 't', label: 'Tagged only', kind: 'view' },
-  { key: 'p', label: 'Preview', kind: 'view' },
-  { key: '?', label: 'Help', kind: 'meta' },
-  { key: 'esc', label: 'Quit', kind: 'meta' },
+  { key: 'enter', label: 'Resume', needs: 'resumable' },
+  { key: 'f', label: 'Fork', needs: 'resumable' },
+  { key: 'r', label: 'Remote', needs: 'resumable' },
+  { key: 'y', label: 'Print cmd', needs: 'resumable' },
+  { key: '/', label: 'Filter' },
+  { key: 's', label: 'Sort' },
+  { key: 't', label: 'Tagged only' },
+  { key: 'p', label: 'Preview' },
+  { key: '?', label: 'Help' },
+  { key: 'esc', label: 'Quit' },
 ];
+
+/**
+ * Mark each action enabled or not for the session under the cursor.
+ *
+ * This is the part that actually teaches. A menu that lists everything the tool
+ * can ever do is a manual; a menu that answers "what can I do with *this* row"
+ * is something you read instead of learning. An unavailable action stays listed
+ * and goes dim, so the answer to "why can't I resume this one" is on screen
+ * rather than in the docs.
+ */
+export function menuFor(session) {
+  return ACTIONS.map((a) => {
+    if (!a.needs) return a;
+    const enabled = a.needs === 'resumable' ? Boolean(session && session.resumable) : true;
+    return { ...a, enabled };
+  });
+}
 
 /**
  * Lay the key menu out in columns.
@@ -80,8 +97,12 @@ export function layoutMenu(entries, avail, gap = 3) {
       // Column-major, so reading down a column follows the declared order.
       const e = entries[col * rows + r];
       if (!e) continue;
-      const paint = e.enabled === false ? c.dim : (x) => x;
-      cells.push(paint(c.bold(pad(e.key, keyCol)) + '  ' + pad(e.label, labelCol)));
+      const key = pad(e.key, keyCol);
+      const label = pad(e.label, labelCol);
+      // A disabled cell is dimmed as one piece. Wrapping a bold key inside a
+      // dim cell does not work: the reset that closes the bold closes the dim
+      // with it, and the label comes out at full brightness.
+      cells.push(e.enabled === false ? c.dim(key + '  ' + label) : c.bold(key) + '  ' + label);
     }
     lines.push(cells.join(' '.repeat(gap)));
   }
@@ -200,6 +221,9 @@ function helpOverlay(cols, rows) {
   const lines = [c.bold('Keys'), ''];
   for (const a of ACTIONS) lines.push(`  ${c.bold(pad(a.key, 7))} ${a.label}`);
   lines.push('');
+  lines.push(c.dim('  A key shown dim does not apply to the highlighted session.'));
+  lines.push(c.dim('  Expired sessions have no transcript left, so they cannot be resumed.'));
+  lines.push('');
   lines.push(c.bold('Moving'));
   lines.push(`  ${c.bold(pad('j k', 7))} Down / up (arrows work too)`);
   lines.push(`  ${c.bold(pad('g G', 7))} First / last`);
@@ -281,7 +305,8 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
             : c.dim('press / to filter'),
       ];
       const leftWidth = Math.max(...left.map(width)) + 3;
-      const menu = layoutMenu(ACTIONS, cols - leftWidth - 2);
+      const entries = menuFor(filtered[cursor]);
+      const menu = layoutMenu(entries, cols - leftWidth - 2);
       // The grid may not fit beside the state block on a narrow or short
       // terminal. It is allowed a couple of rows more than the block before the
       // single-line fallback takes over, because losing the grid costs more
@@ -295,7 +320,7 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
         const m = grid ? menu[i] ?? '' : '';
         lines.push(' ' + l + (m ? ' '.repeat(Math.max(1, leftWidth - width(l))) + m : ''));
       }
-      if (!grid) lines.push(' ' + compactMenu(ACTIONS, cols - 3));
+      if (!grid) lines.push(' ' + compactMenu(entries, cols - 3));
       return lines;
     }
 
@@ -346,7 +371,10 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
       };
       const act = (action) => {
         const chosen = filtered[cursor];
-        return chosen ? done({ session: chosen, action }) : undefined;
+        // The menu already dims these, so refusing here is just keeping the two
+        // in agreement rather than a second, hidden rule.
+        if (!chosen || !chosen.resumable) return draw();
+        return done({ session: chosen, action });
       };
 
       if (key.ctrl && key.name === 'c') return done(null);
