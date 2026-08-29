@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/claude-sessions-cli"><img alt="npm" src="https://img.shields.io/npm/v/claude-sessions-cli.svg"></a>
-  <a href="https://github.com/coldbrew-p/claude-session-manager/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/coldbrew-p/claude-session-manager/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/soohunee/claude-session-manager/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/soohunee/claude-session-manager/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Node" src="https://img.shields.io/node/v/claude-sessions-cli.svg">
   <img alt="Dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen.svg">
@@ -249,7 +249,7 @@ To keep untagged sessions around longer, raise `cleanupPeriodDays` in
 ## Development
 
 ```bash
-git clone https://github.com/coldbrew-p/claude-session-manager
+git clone https://github.com/soohunee/claude-session-manager
 cd claude-session-manager
 npm test                      # node:test, no dependencies
 node bin/csm.js --help

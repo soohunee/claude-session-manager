@@ -1,7 +1,7 @@
 # csm 작업 현황 및 다음 할 일
 
 > 작성일 2026-08-29 · **v0.1.0 배포 완료**
-> npm: https://www.npmjs.com/package/claude-sessions-cli · GitHub: https://github.com/coldbrew-p/claude-session-manager
+> npm: https://www.npmjs.com/package/claude-sessions-cli · GitHub: https://github.com/soohunee/claude-session-manager
 
 ---
 
@@ -127,7 +127,7 @@ claude-session-manager/
 
 ### A. 지금 바로
 
-- [x] **GitHub 레포 생성** — public으로 생성 완료: https://github.com/coldbrew-p/claude-session-manager
+- [x] **GitHub 레포 생성** — public으로 생성 완료: https://github.com/soohunee/claude-session-manager
 - [x] `package.json`에 `repository`, `bugs`, `homepage`, `author` 필드 추가
 - [x] README를 오픈소스 관례에 맞게 재작성 (배지, 기능 목록, 명령어·옵션·단축키 표)
 - [x] 커밋 메시지에서 `Co-Authored-By: Claude` / `Claude-Session:` 트레일러 제거 후 force push
