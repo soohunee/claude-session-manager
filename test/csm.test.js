@@ -39,7 +39,7 @@ test('width and truncation account for wide characters', () => {
   assert.equal(width('abc'), 3);
   assert.equal(width('한글'), 4);
   assert.equal(width('a한b'), 4);
-  assert.equal(width(truncate('입시 시장 MCP와 스킬 찾기', 10)) <= 10, true);
+  assert.equal(width(truncate('한글 제목이 아주 길어지는 경우', 10)) <= 10, true);
   assert.equal(width(pad('한글', 10)), 10);
   assert.equal(width(pad('this string is far too long', 10)), 10);
 });
