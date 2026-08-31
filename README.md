@@ -43,7 +43,7 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.1.2              enter  Resume          a      Archive         g      Tree
+ csm 0.2.0              enter  Resume          a      Archive         g      Tree
  4 shown · 54 expired   f      Fork            /      Filter          u      Go to parent
  sort time              r      Remote          s      Sort            p      Preview
  filter ref             y      Print cmd       t      Tag filter      ?      Help
