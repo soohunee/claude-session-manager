@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { projectsDir, historyFile, archiveDir, indexFile } from './paths.js';
 import { readJson, writeJson, loadTags } from './store.js';
+import { loadLinks } from './links.js';
 
 const INDEX_VERSION = 2;
 
@@ -237,11 +238,25 @@ export function scanSessions({ refresh = false } = {}) {
   }
 
   const tags = loadTags().sessions;
-  const sessions = [...byId.values()].map((s) => ({
-    ...s,
-    tags: tags[s.id]?.tags || [],
-    label: s.title || s.firstPrompt || s.lastPrompt || '(untitled)',
-  }));
+  const links = loadLinks().links;
+  const sessions = [...byId.values()].map((s) => {
+    const link = links[s.id];
+    return {
+      ...s,
+      tags: tags[s.id]?.tags || [],
+      parent: link?.parent || null,
+      // A derived session opens with the handoff instructions csm wrote, so
+      // falling through to `firstPrompt` would label every one of them with the
+      // same boilerplate. Naming its parent is the useful answer until Claude
+      // Code gets around to titling it.
+      label:
+        s.title ||
+        (link ? `\u2191 ${link.title || 'derived session'}` : null) ||
+        s.firstPrompt ||
+        s.lastPrompt ||
+        '(untitled)',
+    };
+  });
 
   sessions.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
 

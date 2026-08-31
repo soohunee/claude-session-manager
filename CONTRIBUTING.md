@@ -37,13 +37,18 @@ A change to what the tool does is not finished until the docs match it. Before
 opening the PR, check every place the behaviour is described:
 
 - `README.md` — the feature list, the command and option tables, the picker
-  key table, and the sample screen near the top, whose footer line is copied
-  from what the picker actually prints
+  key table, and the sample screen near the top
 - `HELP` in `src/cli.js` — usage, options, and picker keys
 - `CONTRIBUTING.md`, if the workflow itself changed
 
-The sample screen and the key tables go stale most easily, because nothing
-fails when they drift.
+A new picker key goes in `ACTIONS` in `src/tui.js` first. That list drives the
+on-screen menu, the `?` overlay, and which keys are dimmed for the highlighted
+session, so a key added anywhere else will not appear in any of them.
+
+The sample screen in the README is real output, not something written by hand:
+take it from a run at 100 columns with the preview panel open, rather than
+editing the columns to fit. The screen and the key tables go stale most easily,
+because nothing fails when they drift.
 
 Set `CLAUDE_CONFIG_DIR` to experiment without touching your real `~/.claude`:
 

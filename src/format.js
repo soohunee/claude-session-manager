@@ -1,10 +1,34 @@
 // Hangul, CJK ideographs, and fullwidth forms occupy two terminal cells.
 const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/;
 
-/** Display width in terminal cells. */
+const RESET = '\u001b[0m';
+
+/**
+ * Split a string into things that occupy a cell and things that do not.
+ *
+ * Colour is written inline as escape sequences, so measuring or cutting a
+ * string naively counts those escapes as visible characters. A coloured line
+ * then measures far wider than it looks and gets cut long before the edge of
+ * the terminal, which is how the picker's key menu ended up truncated exactly
+ * where it needed to be readable.
+ */
+function cells(str) {
+  const out = [];
+  const re = /\u001b\[[0-9;]*m|[\s\S]/gu;
+  let m;
+  while ((m = re.exec(str)) !== null) out.push(m[0]);
+  return out;
+}
+
+const isEscape = (t) => t.charCodeAt(0) === 27;
+
+/** Display width in terminal cells, ignoring colour escapes. */
 export function width(str) {
   let w = 0;
-  for (const ch of String(str)) w += WIDE.test(ch) ? 2 : 1;
+  for (const t of cells(String(str))) {
+    if (isEscape(t)) continue;
+    w += WIDE.test(t) ? 2 : 1;
+  }
   return w;
 }
 
@@ -14,13 +38,21 @@ export function truncate(str, max) {
   if (width(s) <= max) return s;
   let out = '';
   let w = 0;
-  for (const ch of s) {
-    const cw = WIDE.test(ch) ? 2 : 1;
+  let coloured = false;
+  for (const t of cells(s)) {
+    // Colour changes are kept whatever happens, so a cut cannot leave the text
+    // painted in whatever the previous run set.
+    if (isEscape(t)) {
+      out += t;
+      coloured = true;
+      continue;
+    }
+    const cw = WIDE.test(t) ? 2 : 1;
     if (w + cw > max - 1) break;
-    out += ch;
+    out += t;
     w += cw;
   }
-  return out + '…';
+  return out + '\u2026' + (coloured ? RESET : '');
 }
 
 /** Truncate, then pad to exactly `max` display cells. */

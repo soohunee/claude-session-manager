@@ -17,6 +17,8 @@ export const tagsFile = () => path.join(csmHome(), 'tags.json');
 export const archiveDir = () => path.join(csmHome(), 'archive');
 export const currentDir = () => path.join(csmHome(), 'current');
 export const indexFile = () => path.join(csmHome(), 'index.json');
+export const linksFile = () => path.join(csmHome(), 'links.json');
+export const handoffDir = () => path.join(csmHome(), 'handoff');
 
 /**
  * Claude Code names each project dir after its cwd with every non-alphanumeric

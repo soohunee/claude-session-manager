@@ -3,21 +3,31 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 // paths.js reads CLAUDE_CONFIG_DIR lazily, so every test can point csm at its
 // own throwaway config dir.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'csm-test-'));
 process.env.CLAUDE_CONFIG_DIR = root;
 
-const { width, truncate, pad, relTime } = await import('../src/format.js');
+// format.js decides once, at import, whether to emit colour. Under a test
+// runner stdout is not a terminal, which would leave every escape sequence out
+// and quietly turn the colour assertions below into assertions about nothing.
+process.stdout.isTTY = true;
+delete process.env.NO_COLOR;
+
+const { width, truncate, pad, relTime, c } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
+const { pick, layoutMenu, compactMenu, menuFor, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
 const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
 const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
+const { recordLink, removeLink, loadLinks, linkedIds, buildTree } = await import('../src/links.js');
+const { extractHandoff, frameHandoff } = await import('../src/handoff.js');
 
 const CWD = '/tmp/csm-fixture-project';
 
@@ -397,4 +407,354 @@ test('tailMessages reads only the tail and drops the partial first record', () =
 
 test('tailMessages survives a missing file', () => {
   assert.deepEqual(tailMessages(path.join(root, 'nope.jsonl')), []);
+});
+
+test('lineage survives a session losing its last tag', () => {
+  addTags('parent-a', ['keepme']);
+  recordLink('child-a', 'parent-a', { title: 'the parent' });
+  removeTags('parent-a', []);
+  assert.equal(loadTags().sessions['parent-a'], undefined);
+  // The link store is separate precisely so untagging cannot take it out.
+  assert.equal(loadLinks().links['child-a'].parent, 'parent-a');
+  assert.deepEqual([...linkedIds()].sort(), ['child-a', 'parent-a']);
+  removeLink('child-a');
+  assert.equal(loadLinks().links['child-a'], undefined);
+});
+
+test('recordLink refuses a self-link and removeLink reports a miss', () => {
+  assert.equal(recordLink('same', 'same'), null);
+  assert.equal(recordLink('only-child', null), null);
+  assert.equal(removeLink('never-existed'), false);
+});
+
+test('buildTree nests children and promotes the ones whose parent is out of view', () => {
+  const links = {
+    kid: { parent: 'root' },
+    grandkid: { parent: 'kid' },
+    orphan: { parent: 'gone' },
+  };
+  const sessions = ['root', 'kid', 'grandkid', 'orphan', 'loner'].map((id) => ({ id }));
+  const tree = buildTree(sessions, links);
+  assert.deepEqual(
+    tree.map((s) => [s.id, s.depth]),
+    [['root', 0], ['kid', 1], ['grandkid', 2], ['orphan', 0], ['loner', 0]]
+  );
+});
+
+test('buildTree survives a cycle in a hand-edited store', () => {
+  const links = { a: { parent: 'b' }, b: { parent: 'a' } };
+  const tree = buildTree([{ id: 'a' }, { id: 'b' }], links);
+  assert.equal(tree.length, 2);
+  assert.deepEqual(tree.map((s) => s.id).sort(), ['a', 'b']);
+});
+
+test('a derived session is labelled after its parent, not the handoff boilerplate', () => {
+  const seed = 'A previous session ran out of room, so its context has been handed to you.';
+  writeTranscript('derived-1', [
+    { type: 'user', cwd: CWD, timestamp: '2026-02-01T00:00:00.000Z', message: { role: 'user', content: seed } },
+  ]);
+  recordLink('derived-1', 'parent-b', { title: 'the original work' });
+  const found = scanSessions({ refresh: true }).find((s) => s.id === 'derived-1');
+  assert.equal(found.parent, 'parent-b');
+  assert.equal(found.label, '\u2191 the original work');
+  removeLink('derived-1');
+});
+
+test('extractHandoff records what was asked and done without a model', () => {
+  const file = writeTranscript('handoff-src', [
+    { type: 'user', cwd: CWD, timestamp: '2026-03-01T00:00:00.000Z', message: { role: 'user', content: 'fix the parser' } },
+    { type: 'user', cwd: CWD, timestamp: '2026-03-01T00:00:30.000Z', message: { role: 'user', content: '<command-name>/noise</command-name>' } },
+    {
+      type: 'assistant',
+      cwd: CWD,
+      timestamp: '2026-03-01T00:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', name: 'Edit', input: { file_path: '/src/parser.js' } },
+          { type: 'tool_use', name: 'Bash', input: { command: 'npm test\nsecond line' } },
+        ],
+      },
+    },
+  ]);
+  const md = extractHandoff({ id: 'handoff-src', label: 'Parser work', cwd: CWD, file, messages: 3 });
+  assert.match(md, /^# Handoff — Parser work/);
+  assert.match(md, /fix the parser/);
+  assert.match(md, /\/src\/parser\.js/);
+  assert.match(md, /npm test/);
+  assert.match(md, /Edit 1×/);
+  // The command envelope is noise, and only the first line of a command is kept.
+  assert.equal(md.includes('command-name'), false);
+  assert.equal(md.includes('second line'), false);
+});
+
+test('frameHandoff drops the heading the model writes for itself', () => {
+  const framed = frameHandoff(
+    { id: 'p1', label: 'Real title', cwd: CWD },
+    '# Session Handoff — something\n\n## Goal\n\nship it'
+  );
+  assert.match(framed, /^# Handoff — Real title/);
+  assert.equal(framed.includes('# Session Handoff'), false);
+  assert.match(framed, /## Goal/);
+  assert.match(framed, /ship it/);
+  // Exactly one top-level heading survives.
+  assert.equal(framed.split('\n').filter((l) => /^# /.test(l)).length, 1);
+});
+
+test('parseArgs reads the derive flags', () => {
+  const { opts } = parseArgs(['derive', '--fast', '--note', 'keep going', '--model', 'haiku']);
+  assert.equal(opts.fast, true);
+  assert.equal(opts.note, 'keep going');
+  assert.equal(opts.model, 'haiku');
+});
+
+test('width and truncate ignore colour escapes', () => {
+  const red = '\u001b[31m';
+  const reset = '\u001b[0m';
+  assert.equal(width(red + 'abcde' + reset), 5);
+  // Cutting a coloured string must not count the escapes as visible cells, or a
+  // painted line disappears long before the edge of the terminal.
+  assert.equal(width(truncate(red + 'abcdefghij' + reset, 5)), 5);
+  // …and it must close the colour it opened.
+  assert.equal(truncate(red + 'abcdefghij' + reset, 5).endsWith(reset), true);
+  assert.equal(truncate('abcdefghij', 5), 'abcd\u2026');
+});
+
+test('the key menu drops columns rather than truncating a label', () => {
+  const wide = layoutMenu(ACTIONS, 120);
+  const narrow = layoutMenu(ACTIONS, 30);
+  assert.ok(narrow.length > wide.length, 'a narrow menu should be taller');
+  for (const lines of [wide, narrow]) {
+    const text = lines.join('\n');
+    assert.equal(text.includes('\u2026'), false, 'no label may be cut');
+    for (const a of ACTIONS) assert.ok(text.includes(a.label), `${a.label} must stay listed`);
+  }
+});
+
+test('the key menu fits the width it is given', () => {
+  for (const avail of [120, 80, 60, 40, 20]) {
+    for (const line of layoutMenu(ACTIONS, avail)) {
+      assert.ok(width(line) <= avail, `a ${avail}-cell menu produced a ${width(line)}-cell line`);
+    }
+  }
+  assert.deepEqual(layoutMenu(ACTIONS, 4), [], 'too narrow for anything gives nothing');
+});
+
+test('the compact menu always says how to see the rest', () => {
+  for (const avail of [80, 40, 20, 8]) {
+    const line = compactMenu(ACTIONS, avail);
+    assert.match(line, /More keys/);
+    assert.equal(line.includes('\u2026'), false);
+  }
+  assert.ok(width(compactMenu(ACTIONS, 80)) > width(compactMenu(ACTIONS, 30)));
+});
+
+test('the menu answers what can be done with the highlighted session', () => {
+  const live = menuFor({ resumable: true, file: 'x', cwd: CWD, tags: ['keep'], parent: 'p0' });
+  const expired = menuFor({ resumable: false, cwd: CWD, tags: ['keep'], parent: 'p0' });
+  const on = (menu, key) => menu.find((a) => a.key === key).enabled !== false;
+  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'n', 'd', 'a', 'c', 'u']);
+
+  // A live, tagged session can take everything.
+  for (const a of live) assert.notEqual(a.enabled, false, `${a.key} should be live`);
+  // An expired one has no transcript, so it cannot be resumed or archived, but
+  // its tags are still csm's own and can still be dropped.
+  for (const key of ['enter', 'f', 'r', 'y', 'n', 'a']) {
+    assert.equal(on(expired, key), false, `${key} needs a transcript`);
+  }
+  assert.equal(on(expired, 'd'), true, 'tags outlive the transcript');
+  // Keys that act on the view, not the session, never go dim.
+  for (const key of ['/', 's', 't', '.', 'g', 'p', '?', 'esc']) {
+    assert.equal(on(expired, key), true, `${key} should not depend on the session`);
+  }
+  assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'd'), false, 'nothing to untag');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', archived: true, tags: [] }), 'a'), false, 'already archived');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'c'), false, 'no directory to narrow to');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', cwd: CWD, tags: [] }), 'u'), false, 'nothing to go up to');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', cwd: CWD, tags: [], parent: 'p1' }), 'u'), true);
+  // An empty list still produces a readable menu rather than throwing.
+  assert.equal(on(menuFor(undefined), 'enter'), false);
+});
+
+test('a disabled key is dimmed as one piece', () => {
+  assert.notEqual(c.dim('x'), 'x', 'colour must be on for this to test anything');
+  const [line] = layoutMenu([{ key: 'x', label: 'Nope', enabled: false }], 40);
+  const [live] = layoutMenu([{ key: 'x', label: 'Yep' }], 40);
+  // Bold inside dim does not survive: the reset closing the bold closes the dim
+  // with it, and the label comes back at full brightness.
+  assert.equal(line, c.dim('x  Nope'));
+  assert.equal(line.includes('\u001b[1m'), false);
+  assert.equal(live, c.bold('x') + '  Yep');
+});
+
+/**
+ * Drive the picker with a scripted list of keypresses.
+ *
+ * The picker reads process.stdin and process.stdout directly, so the only way
+ * to exercise the parts that matter — refusing an action the menu has dimmed,
+ * and staying open after one that acts in place — is to stand in for both and
+ * put them back afterwards.
+ */
+async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24, ...rest } = {}) {
+  const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+  const { write, columns, rows: realRows } = process.stdout;
+  const frames = [];
+  const stdin = new EventEmitter();
+  Object.assign(stdin, { isTTY: true, setRawMode() {}, resume() {}, pause() {}, setEncoding() {} });
+  Object.defineProperty(process, 'stdin', { value: stdin, configurable: true });
+  // Capture only what the picker draws. Swallowing every write would eat the
+  // test runner's own reporting, which happens during the await below and made
+  // a full suite report as a single test.
+  const mine = /\u001b\[(2J|\?1049|\?25)/;
+  process.stdout.write = (chunk) => {
+    const text = String(chunk);
+    if (!mine.test(text)) return write.call(process.stdout, chunk);
+    frames.push(text);
+    return true;
+  };
+  process.stdout.columns = cols;
+  process.stdout.rows = rows;
+  try {
+    const pending = pick(sessions, { actions, ...rest });
+    for (const k of keys) stdin.emit('keypress', k.str ?? null, k);
+    // Snapshot before yielding. Every draw is synchronous, but the moment this
+    // awaits, the test runner's own writes land in `frames` too.
+    const screen = (frames[frames.length - 1] || '').replace(/\u001b\[[0-9;]*m/g, '');
+    // Nothing resolves unless a key asked it to, so race the promise against a
+    // turn of the loop rather than hanging when the picker is still open.
+    const result = await Promise.race([pending, new Promise((r) => setImmediate(() => r('still-open')))]);
+    // Close a picker that is still open, so it takes its resize listener off
+    // the real stdout. Doing it before the restore keeps the escape codes it
+    // writes on the way out from reaching the terminal.
+    stdin.emit('keypress', null, { name: 'escape' });
+    return { result, screen };
+  } finally {
+    Object.defineProperty(process, 'stdin', realStdin);
+    process.stdout.write = write;
+    process.stdout.columns = columns;
+    process.stdout.rows = realRows;
+  }
+}
+
+const LIVE = { id: 'live0000-0000', label: 'Live one', cwd: CWD, resumable: true, file: '/x', tags: ['keep'], updatedAt: '2026-01-02T00:00:00.000Z', messages: 3 };
+const EXPIRED = { id: 'gone0000-0000', label: 'Expired one', cwd: CWD, resumable: false, file: null, tags: [], updatedAt: '2026-01-01T00:00:00.000Z', messages: 1 };
+
+test('the picker resumes the highlighted session', async () => {
+  const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'return' }]);
+  assert.equal(result.action, 'resume');
+  assert.equal(result.session.id, LIVE.id);
+});
+
+test('the picker refuses an action its menu has dimmed', async () => {
+  // Cursor down onto the expired session, then try every key that needs a
+  // transcript. Each must be ignored rather than handing over a session with
+  // nothing left to resume.
+  for (const key of [{ name: 'return' }, { name: 'f' }, { name: 'r' }, { name: 'y' }]) {
+    const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, key], { expired: true });
+    assert.equal(result, 'still-open', `${key.name} should have been refused`);
+  }
+  const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, { name: 'escape' }], { expired: true });
+  assert.equal(result, null, 'escape still quits');
+});
+
+test('untagging asks first, and only y goes through', async () => {
+  let called = 0;
+  const actions = { untag: () => (called++, 'untagged'), reload: () => [LIVE] };
+
+  const asked = await drivePicker([LIVE], [{ name: 'd' }], { actions });
+  assert.match(asked.screen, /Remove tags\?/);
+  assert.match(asked.screen, /y to remove/);
+  assert.equal(called, 0, 'nothing happens until the question is answered');
+
+  await drivePicker([LIVE], [{ name: 'd' }, { str: 'n', name: 'n' }], { actions });
+  assert.equal(called, 0, 'any key other than y cancels');
+
+  const done = await drivePicker([LIVE], [{ name: 'd' }, { str: 'y', name: 'y' }], { actions });
+  assert.equal(called, 1);
+  assert.equal(done.result, 'still-open', 'the picker stays open after acting');
+  assert.match(done.screen, /untagged/, 'and says what it did');
+});
+
+test('an in-place action reloads the list without losing the cursor', async () => {
+  const after = [{ ...LIVE, tags: [] }, EXPIRED];
+  let reloaded = 0;
+  const actions = { archive: () => 'archived 1KB', reload: () => (reloaded++, after) };
+  const { result, screen } = await drivePicker([LIVE, EXPIRED], [{ name: 'a' }], { actions });
+  assert.equal(reloaded, 1);
+  assert.equal(result, 'still-open');
+  assert.match(screen, /archived 1KB/);
+  // Still on the session that was acted on, not reset to the top.
+  assert.match(screen, /^> .*Live one/m);
+});
+
+test('the picker hides expired sessions until asked, and can bring them back', async () => {
+  const off = await drivePicker([LIVE, EXPIRED], []);
+  assert.equal(off.screen.includes('Expired one'), false, 'hidden by default');
+  const on = await drivePicker([LIVE, EXPIRED], [{ str: '.' }]);
+  assert.match(on.screen, /Expired one/);
+  assert.match(on.screen, /expired/, 'and the state block says so');
+  // The same key puts them away again, so the toggle is not one-way.
+  const back = await drivePicker([LIVE, EXPIRED], [{ str: '.' }, { str: '.' }]);
+  assert.equal(back.screen.includes('Expired one'), false);
+});
+
+test('the tag key cycles off, any tag, then each tag in turn', async () => {
+  const a = { ...LIVE, id: 'a', label: 'Has billing', tags: ['billing'] };
+  const b = { ...LIVE, id: 'b', label: 'Has ops', tags: ['ops'] };
+  const none = { ...LIVE, id: 'n', label: 'Has none', tags: [] };
+  const press = (n) => drivePicker([a, b, none], Array.from({ length: n }, () => ({ name: 't' })));
+
+  const off = await press(0);
+  for (const l of ['Has billing', 'Has ops', 'Has none']) assert.match(off.screen, new RegExp(l));
+
+  const any = await press(1);
+  assert.equal(any.screen.includes('Has none'), false, 'any tag excludes the untagged');
+
+  const billing = await press(2);
+  assert.match(billing.screen, /Has billing/);
+  assert.equal(billing.screen.includes('Has ops'), false);
+  assert.match(billing.screen, /#billing/, 'the state block names the tag');
+
+  const ops = await press(3);
+  assert.match(ops.screen, /Has ops/);
+  assert.equal(ops.screen.includes('Has billing'), false);
+
+  // Round trips back to showing everything rather than dead-ending.
+  const wrapped = await press(4);
+  for (const l of ['Has billing', 'Has ops', 'Has none']) assert.match(wrapped.screen, new RegExp(l));
+});
+
+test('narrowing to a directory can always be undone', async () => {
+  const here = { ...LIVE, id: 'h', label: 'In here', cwd: '/tmp/here' };
+  const there = { ...LIVE, id: 't', label: 'Over there', cwd: '/tmp/there' };
+  const narrowed = await drivePicker([here, there], [{ name: 'c' }]);
+  assert.match(narrowed.screen, /In here/);
+  assert.equal(narrowed.screen.includes('Over there'), false);
+  const widened = await drivePicker([here, there], [{ name: 'c' }, { name: 'c' }]);
+  assert.match(widened.screen, /Over there/);
+});
+
+test('the picker nests derived sessions and can jump to a parent', async () => {
+  const root = { ...LIVE, id: 'root', label: 'The original', tags: [], parent: null };
+  const kid = { ...LIVE, id: 'kid', label: 'Carried on', tags: [], parent: 'root', updatedAt: '2026-01-03T00:00:00.000Z' };
+  recordLink('kid', 'root');
+
+  // Flat, the child sorts above its parent by recency and reads as unrelated.
+  const flat = await drivePicker([kid, root], []);
+  assert.equal(/Carried on[\s\S]*The original/.test(flat.screen), true);
+  assert.equal(flat.screen.includes('\u2514 Carried on'), false);
+
+  const tree = await drivePicker([kid, root], [{ name: 'g' }]);
+  assert.match(tree.screen, /The original[\s\S]*\u2514 Carried on/, 'the child hangs off its parent');
+  assert.match(tree.screen, /tree/, 'and the state block says so');
+
+  // From the child, `u` moves the cursor onto the parent.
+  const jumped = await drivePicker([kid, root], [{ name: 'g' }, { name: 'j' }, { name: 'u' }]);
+  assert.match(jumped.screen, /^> .*The original/m);
+
+  // With the parent filtered out, the jump says so instead of moving somewhere
+  // the user did not ask for.
+  const alone = await drivePicker([kid], [{ name: 'u' }]);
+  assert.match(alone.screen, /parent is not in this view/);
+  removeLink('kid');
 });
