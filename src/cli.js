@@ -682,7 +682,27 @@ async function cmdPick(opts, rest, passthrough) {
   const subtitle =
     `${plural(sessions.length, 'session')} shown` +
     (expired && !opts.all ? ` · ${expired} expired, transcript gone (-a to list)` : '');
+  // The picker owns no storage of its own: it is handed the operations it may
+  // perform, so it stays a renderer and the rules about archives live in one
+  // place. Each returns the line to flash in the footer.
+  const reload = () => selectSessions({ ...opts, tagged: false }, null);
+  const actions = {
+    reload,
+    untag(session) {
+      removeTags(session.id, []);
+      if (linkedIds().has(session.id)) return `untagged ${session.id.slice(0, 8)} · archive kept, it is part of a session tree`;
+      const gone = removeArchive(session.id);
+      return `untagged ${session.id.slice(0, 8)}${gone ? ' · archive removed' : ''}`;
+    },
+    archive(session) {
+      const res = archiveSession(session);
+      if (!res.ok) return `could not archive: ${res.reason}`;
+      return res.skipped ? 'archive already up to date' : `archived ${humanBytes(res.bytes)}`;
+    },
+  };
+
   const chosen = await pick(pool, {
+    actions,
     scope: scope.join('  '),
     version: pkg.version,
     subtitle,

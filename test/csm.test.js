@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 // paths.js reads CLAUDE_CONFIG_DIR lazily, so every test can point csm at its
 // own throwaway config dir.
@@ -19,7 +20,7 @@ const { width, truncate, pad, relTime, c } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
-const { layoutMenu, compactMenu, menuFor, ACTIONS } = await import('../src/tui.js');
+const { pick, layoutMenu, compactMenu, menuFor, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
 const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
@@ -549,21 +550,27 @@ test('the compact menu always says how to see the rest', () => {
 });
 
 test('the menu answers what can be done with the highlighted session', () => {
-  const live = menuFor({ resumable: true });
-  const expired = menuFor({ resumable: false });
-  const needsSession = ACTIONS.filter((a) => a.needs).map((a) => a.key);
-  assert.deepEqual(needsSession, ['enter', 'f', 'r', 'y']);
+  const live = menuFor({ resumable: true, file: 'x', tags: ['keep'] });
+  const expired = menuFor({ resumable: false, tags: ['keep'] });
+  const on = (menu, key) => menu.find((a) => a.key === key).enabled !== false;
+  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'd', 'a']);
 
+  // A live, tagged session can take everything.
   for (const a of live) assert.notEqual(a.enabled, false, `${a.key} should be live`);
-  for (const key of needsSession) {
-    assert.equal(expired.find((a) => a.key === key).enabled, false, `${key} needs a transcript`);
+  // An expired one has no transcript, so it cannot be resumed or archived, but
+  // its tags are still csm's own and can still be dropped.
+  for (const key of ['enter', 'f', 'r', 'y', 'a']) {
+    assert.equal(on(expired, key), false, `${key} needs a transcript`);
   }
-  // Everything else keeps working on a session with nothing left to resume.
-  for (const a of expired.filter((a) => !needsSession.includes(a.key))) {
-    assert.notEqual(a.enabled, false, `${a.key} should not depend on the session`);
+  assert.equal(on(expired, 'd'), true, 'tags outlive the transcript');
+  // Keys that act on the view, not the session, never go dim.
+  for (const key of ['/', 's', 't', 'p', '?', 'esc']) {
+    assert.equal(on(expired, key), true, `${key} should not depend on the session`);
   }
+  assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'd'), false, 'nothing to untag');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', archived: true, tags: [] }), 'a'), false, 'already archived');
   // An empty list still produces a readable menu rather than throwing.
-  assert.equal(menuFor(undefined).find((a) => a.key === 'enter').enabled, false);
+  assert.equal(on(menuFor(undefined), 'enter'), false);
 });
 
 test('a disabled key is dimmed as one piece', () => {
@@ -575,4 +582,100 @@ test('a disabled key is dimmed as one piece', () => {
   assert.equal(line, c.dim('x  Nope'));
   assert.equal(line.includes('\u001b[1m'), false);
   assert.equal(live, c.bold('x') + '  Yep');
+});
+
+/**
+ * Drive the picker with a scripted list of keypresses.
+ *
+ * The picker reads process.stdin and process.stdout directly, so the only way
+ * to exercise the parts that matter — refusing an action the menu has dimmed,
+ * and staying open after one that acts in place — is to stand in for both and
+ * put them back afterwards.
+ */
+async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24 } = {}) {
+  const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+  const { write, columns, rows: realRows } = process.stdout;
+  const frames = [];
+  const stdin = new EventEmitter();
+  Object.assign(stdin, { isTTY: true, setRawMode() {}, resume() {}, pause() {}, setEncoding() {} });
+  Object.defineProperty(process, 'stdin', { value: stdin, configurable: true });
+  // Capture only what the picker draws. Swallowing every write would eat the
+  // test runner's own reporting, which happens during the await below and made
+  // a full suite report as a single test.
+  const mine = /\u001b\[(2J|\?1049|\?25)/;
+  process.stdout.write = (chunk) => {
+    const text = String(chunk);
+    if (!mine.test(text)) return write.call(process.stdout, chunk);
+    frames.push(text);
+    return true;
+  };
+  process.stdout.columns = cols;
+  process.stdout.rows = rows;
+  try {
+    const pending = pick(sessions, { actions });
+    for (const k of keys) stdin.emit('keypress', k.str ?? null, k);
+    // Snapshot before yielding. Every draw is synchronous, but the moment this
+    // awaits, the test runner's own writes land in `frames` too.
+    const screen = (frames[frames.length - 1] || '').replace(/\u001b\[[0-9;]*m/g, '');
+    // Nothing resolves unless a key asked it to, so race the promise against a
+    // turn of the loop rather than hanging when the picker is still open.
+    const result = await Promise.race([pending, new Promise((r) => setImmediate(() => r('still-open')))]);
+    return { result, screen };
+  } finally {
+    Object.defineProperty(process, 'stdin', realStdin);
+    process.stdout.write = write;
+    process.stdout.columns = columns;
+    process.stdout.rows = realRows;
+  }
+}
+
+const LIVE = { id: 'live0000-0000', label: 'Live one', cwd: CWD, resumable: true, file: '/x', tags: ['keep'], updatedAt: '2026-01-02T00:00:00.000Z', messages: 3 };
+const EXPIRED = { id: 'gone0000-0000', label: 'Expired one', cwd: CWD, resumable: false, file: null, tags: [], updatedAt: '2026-01-01T00:00:00.000Z', messages: 1 };
+
+test('the picker resumes the highlighted session', async () => {
+  const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'return' }]);
+  assert.equal(result.action, 'resume');
+  assert.equal(result.session.id, LIVE.id);
+});
+
+test('the picker refuses an action its menu has dimmed', async () => {
+  // Cursor down onto the expired session, then try every key that needs a
+  // transcript. Each must be ignored rather than handing over a session with
+  // nothing left to resume.
+  for (const key of [{ name: 'return' }, { name: 'f' }, { name: 'r' }, { name: 'y' }]) {
+    const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, key]);
+    assert.equal(result, 'still-open', `${key.name} should have been refused`);
+  }
+  const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, { name: 'escape' }]);
+  assert.equal(result, null, 'escape still quits');
+});
+
+test('untagging asks first, and only y goes through', async () => {
+  let called = 0;
+  const actions = { untag: () => (called++, 'untagged'), reload: () => [LIVE] };
+
+  const asked = await drivePicker([LIVE], [{ name: 'd' }], { actions });
+  assert.match(asked.screen, /Remove tags\?/);
+  assert.match(asked.screen, /y to remove/);
+  assert.equal(called, 0, 'nothing happens until the question is answered');
+
+  await drivePicker([LIVE], [{ name: 'd' }, { str: 'n', name: 'n' }], { actions });
+  assert.equal(called, 0, 'any key other than y cancels');
+
+  const done = await drivePicker([LIVE], [{ name: 'd' }, { str: 'y', name: 'y' }], { actions });
+  assert.equal(called, 1);
+  assert.equal(done.result, 'still-open', 'the picker stays open after acting');
+  assert.match(done.screen, /untagged/, 'and says what it did');
+});
+
+test('an in-place action reloads the list without losing the cursor', async () => {
+  const after = [{ ...LIVE, tags: [] }, EXPIRED];
+  let reloaded = 0;
+  const actions = { archive: () => 'archived 1KB', reload: () => (reloaded++, after) };
+  const { result, screen } = await drivePicker([LIVE, EXPIRED], [{ name: 'a' }], { actions });
+  assert.equal(reloaded, 1);
+  assert.equal(result, 'still-open');
+  assert.match(screen, /archived 1KB/);
+  // Still on the session that was acted on, not reset to the top.
+  assert.match(screen, /^> .*Live one/m);
 });

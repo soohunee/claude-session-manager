@@ -50,6 +50,8 @@ export const ACTIONS = [
   { key: 'f', label: 'Fork', needs: 'resumable' },
   { key: 'r', label: 'Remote', needs: 'resumable' },
   { key: 'y', label: 'Print cmd', needs: 'resumable' },
+  { key: 'd', label: 'Untag', needs: 'tagged' },
+  { key: 'a', label: 'Archive', needs: 'archivable' },
   { key: '/', label: 'Filter' },
   { key: 's', label: 'Sort' },
   { key: 't', label: 'Tagged only' },
@@ -70,7 +72,14 @@ export const ACTIONS = [
 export function menuFor(session) {
   return ACTIONS.map((a) => {
     if (!a.needs) return a;
-    const enabled = a.needs === 'resumable' ? Boolean(session && session.resumable) : true;
+    const enabled =
+      a.needs === 'resumable'
+        ? Boolean(session && session.resumable)
+        : a.needs === 'tagged'
+          ? Boolean(session && (session.tags || []).length)
+          : a.needs === 'archivable'
+            ? Boolean(session && session.resumable && session.file && !session.archived)
+            : true;
     return { ...a, enabled };
   });
 }
@@ -217,11 +226,39 @@ function renderPreview(s, cols, height, cache) {
   return lines.slice(0, height);
 }
 
+/**
+ * Draw a box over the middle of the screen, leaving the list visible around it.
+ *
+ * Untagging deletes the archive with the tag, which is the only thing in the
+ * picker that destroys something. Keeping the list behind the box means the
+ * question is asked with its answer in view: you can still see which session
+ * is about to lose its copy.
+ */
+function drawBox(lines, cols, title, body, hint) {
+  const content = [title, '', ...body, '', hint];
+  const inner = Math.min(Math.max(...content.map(width)) + 2, Math.max(20, cols - 8));
+  const left = Math.max(0, Math.floor((cols - inner - 2) / 2));
+  const pane = [
+    c.yellow('\u250c' + '\u2500'.repeat(inner) + '\u2510'),
+    ...content.map((l, i) => {
+      const painted = i === 0 ? c.bold(pad(l, inner - 2)) : i === content.length - 1 ? c.dim(pad(l, inner - 2)) : pad(l, inner - 2);
+      return c.yellow('\u2502') + ' ' + painted + ' ' + c.yellow('\u2502');
+    }),
+    c.yellow('\u2514' + '\u2500'.repeat(inner) + '\u2518'),
+  ];
+  const top = Math.max(0, Math.floor((lines.length - pane.length) / 2));
+  for (let i = 0; i < pane.length && top + i < lines.length; i++) {
+    lines[top + i] = ' '.repeat(left) + pane[i];
+  }
+  return lines;
+}
+
 function helpOverlay(cols, rows) {
   const lines = [c.bold('Keys'), ''];
   for (const a of ACTIONS) lines.push(`  ${c.bold(pad(a.key, 7))} ${a.label}`);
   lines.push('');
   lines.push(c.dim('  A key shown dim does not apply to the highlighted session.'));
+  lines.push(c.dim('  Untagging deletes the archived copy too, so it asks first.'));
   lines.push(c.dim('  Expired sessions have no transcript left, so they cannot be resumed.'));
   lines.push('');
   lines.push(c.bold('Moving'));
@@ -247,7 +284,7 @@ function helpOverlay(cols, rows) {
  * line that truncated on a narrow terminal, so the features a new user most
  * needed pointing out were the first to disappear.
  */
-export function pick(sessions, { scope = '', subtitle = '', query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', tagged: taggedOnly = false, version = '' } = {}) {
+export function pick(sessions, { actions = {}, scope = '', subtitle = '', query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', tagged: taggedOnly = false, version = '' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -259,7 +296,11 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
     let sort = sortMode;
     let mode = 'normal';
     let overlay = null;
-    let ordered = sortSessions(sessions, sort);
+    let flash = '';
+    // The pool is reloaded in place after an action, so it cannot stay the
+    // caller's array.
+    let pool = sessions;
+    let ordered = sortSessions(pool, sort);
     let filtered = ordered;
     const previewCache = new Map();
 
@@ -327,7 +368,7 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
     function draw() {
       const cols = out.columns || 80;
       const rows = out.rows || 24;
-      if (overlay === 'help') {
+      if (overlay?.kind === 'help') {
         out.write(CLEAR + helpOverlay(cols, rows).join('\n'));
         return;
       }
@@ -357,9 +398,14 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
       }
 
       lines.push(
-        (mode === 'filter' ? c.cyan(' FILTER ') + c.dim('enter keeps it, esc clears it') : c.dim(' NORMAL')) +
+        (mode === 'filter'
+          ? c.cyan(' FILTER ') + c.dim('enter keeps it, esc clears it')
+          : flash
+            ? ' ' + c.green(flash)
+            : c.dim(' NORMAL')) +
           (filtered.length ? c.dim(`  [${cursor + 1}/${filtered.length}]`) : c.red('  no match'))
       );
+      if (overlay?.kind === 'confirm') drawBox(lines, cols, overlay.title, overlay.body, overlay.hint);
       out.write(CLEAR + lines.join('\n'));
     }
 
@@ -369,15 +415,49 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
         cleanup();
         resolve(value);
       };
-      const act = (action) => {
+      const enabledFor = (chosen, key) =>
+        Boolean(chosen) && menuFor(chosen).find((a) => a.key === key)?.enabled !== false;
+
+      const act = (action, key) => {
         const chosen = filtered[cursor];
         // The menu already dims these, so refusing here is just keeping the two
-        // in agreement rather than a second, hidden rule.
-        if (!chosen || !chosen.resumable) return draw();
+        // in agreement rather than adding a second, hidden rule.
+        if (!enabledFor(chosen, key)) return draw();
         return done({ session: chosen, action });
       };
 
+      /**
+       * Run an action and stay in the picker.
+       *
+       * Handing the terminal over for every action would mean quitting to untag
+       * one session and starting again for the next, which is the workflow the
+       * rework exists to remove.
+       */
+      const inPlace = (key, run) => {
+        const chosen = filtered[cursor];
+        if (!enabledFor(chosen, key)) return draw();
+        flash = run(chosen) || '';
+        if (actions.reload) {
+          const keep = chosen.id;
+          pool = actions.reload();
+          ordered = sortSessions(pool, sort);
+          applyFilter();
+          const at = filtered.findIndex((x) => x.id === keep);
+          if (at !== -1) cursor = at;
+          else if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
+        }
+        return draw();
+      };
+
       if (key.ctrl && key.name === 'c') return done(null);
+      if (overlay?.kind === 'confirm') {
+        const go = overlay.onYes;
+        overlay = null;
+        // Only `y` confirms. Any other key cancels, so a stray keypress cannot
+        // delete an archive.
+        if (str === 'y' || str === 'Y') go();
+        return draw();
+      }
       if (overlay) {
         overlay = null;
         return draw();
@@ -413,19 +493,32 @@ export function pick(sessions, { scope = '', subtitle = '', query: initialQuery 
       const last = Math.max(0, filtered.length - 1);
       const page = Math.max(1, Math.floor(((out.rows || 24) - 8) / 2));
       if (key.name === 'escape' || key.name === 'q') return done(null);
-      if (key.name === 'return' || key.name === 'enter') return act('resume');
-      if (key.name === 'f') return act('fork');
-      if (key.name === 'r') return act('remote');
-      if (key.name === 'y') return act('print');
+      if (key.name === 'return' || key.name === 'enter') return act('resume', 'enter');
+      if (key.name === 'f') return act('fork', 'f');
+      if (key.name === 'r') return act('remote', 'r');
+      if (key.name === 'y') return act('print', 'y');
 
-      if (str === '/') mode = 'filter';
-      else if (str === '?') overlay = 'help';
+      flash = '';
+      if (key.name === 'd' && !key.ctrl && actions.untag) {
+        const chosen = filtered[cursor];
+        if (!enabledFor(chosen, 'd')) return draw();
+        overlay = {
+          kind: 'confirm',
+          title: 'Remove tags?',
+          body: [truncate(chosen.label, 60), c.magenta(chosen.tags.map((t) => '#' + t).join(' '))],
+          hint: 'y to remove · any other key to keep',
+          onYes: () => inPlace('d', (sess) => actions.untag(sess)),
+        };
+      } else if (key.name === 'a' && !key.ctrl && actions.archive) {
+        return inPlace('a', (sess) => actions.archive(sess));
+      } else if (str === '/') mode = 'filter';
+      else if (str === '?') overlay = { kind: 'help' };
       else if (key.name === 'p' && !key.ctrl) showPreview = !showPreview;
       else if (key.name === 't') keepingCursor(() => (onlyTagged = !onlyTagged));
       else if (key.name === 's') {
         keepingCursor(() => {
           sort = SORT_MODES[(SORT_MODES.indexOf(sort) + 1) % SORT_MODES.length];
-          ordered = sortSessions(sessions, sort);
+          ordered = sortSessions(pool, sort);
         });
       } else if (key.name === 'j' || key.name === 'down') cursor = Math.min(last, cursor + 1);
       else if (key.name === 'k' || key.name === 'up') cursor = Math.max(0, cursor - 1);
