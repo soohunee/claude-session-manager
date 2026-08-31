@@ -116,6 +116,23 @@ npm install -g claude-sessions-cli
 csm init
 ```
 
+If you cannot reach the npm registry, every
+[release](https://github.com/soohunee/claude-session-manager/releases) carries
+two downloads. `claude-sessions-cli-<version>.tgz` installs with
+`npm i -g ./claude-sessions-cli-<version>.tgz`, and `csm-<version>.tar.gz` needs
+no npm at all:
+
+```bash
+mkdir -p ~/.local/opt ~/.local/bin
+tar -xzf csm-<version>.tar.gz -C ~/.local/opt
+ln -sf ~/.local/opt/csm-<version>/bin/csm.js ~/.local/bin/csm
+csm init
+```
+
+There are no dependencies and no build step, so the files are the whole install.
+Leave the extracted directory where it is: `csm init` records its absolute path
+in the hooks, and re-run `csm init` after upgrading this way.
+
 `csm init` installs the `/persist` slash command and three hooks. `SessionStart`
 and `UserPromptSubmit` record which session is live in which directory, so
 `/persist` always tags the session that ran it; `SessionEnd` re-archives a

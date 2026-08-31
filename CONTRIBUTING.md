@@ -61,6 +61,11 @@ export CLAUDE_CONFIG_DIR=/tmp/csm-sandbox
 1. Bump `version` in `package.json` on `develop` and merge that in.
 2. Merge `develop` into `master` and push.
 
+Release assets are built by the workflow from `npm pack`, so `files` in
+`package.json` is the one place that decides what ships. The install text on the
+release page comes from `.github/release-notes.md`, where `__VERSION__` is
+substituted; edit that file rather than the workflow.
+
 The `Release` workflow takes it from there: it runs the tests, verifies the npm
 credentials, publishes the package, tags the commit `v<version>`, and creates
 the GitHub Release with generated notes.

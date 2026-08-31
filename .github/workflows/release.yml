@@ -71,11 +71,46 @@ jobs:
           git tag -a "v${{ steps.v.outputs.version }}" -m "csm v${{ steps.v.outputs.version }}"
           git push origin "v${{ steps.v.outputs.version }}"
 
+      # Two assets, because there are two ways in when the npm registry is not
+      # reachable. The .tgz installs with `npm i -g <file>`; the plain tarball
+      # needs no npm at all, only tar and a symlink. Both are built from the
+      # same `npm pack` output, so package.json's `files` stays the one place
+      # that decides what ships.
+      - name: Build the release assets
+        if: steps.check.outputs.released == 'false'
+        id: assets
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          mkdir -p dist
+          npm pack --pack-destination dist
+          tar -xzf "dist/claude-sessions-cli-$V.tgz" -C dist
+          mv dist/package "dist/csm-$V"
+          tar -czf "dist/csm-$V.tar.gz" -C dist "csm-$V"
+          rm -rf "dist/csm-$V"
+          ( cd dist && shasum -a 256 "claude-sessions-cli-$V.tgz" "csm-$V.tar.gz" > SHA256SUMS )
+          cat dist/SHA256SUMS
+
+      # The release page is the whole install path for anyone who cannot reach
+      # the registry, so it carries the instructions rather than pointing at the
+      # README for them. The notes live in .github/release-notes.md so they can
+      # be read and reviewed as markdown instead of as shell quoting.
+      - name: Write the install notes
+        if: steps.check.outputs.released == 'false'
+        run: |
+          sed "s/__VERSION__/${{ steps.v.outputs.version }}/g" \
+            .github/release-notes.md > dist/notes.md
+          cat dist/notes.md
+
       - name: Create the GitHub Release
         if: steps.check.outputs.released == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.v.outputs.version }}" \
-            --title "v${{ steps.v.outputs.version }}" \
-            --generate-notes
+          V="${{ steps.v.outputs.version }}"
+          gh release create "v$V" \
+            --title "v$V" \
+            --notes-file dist/notes.md \
+            --generate-notes \
+            "dist/claude-sessions-cli-$V.tgz" \
+            "dist/csm-$V.tar.gz" \
+            dist/SHA256SUMS
