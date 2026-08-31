@@ -2,6 +2,7 @@ import readline from 'node:readline';
 import { width, truncate, pad, relTime, c } from './format.js';
 import { tailMessages } from './preview.js';
 import { sortSessions, SORT_MODES } from './scan.js';
+import { buildTree } from './links.js';
 
 const ESC = '\x1b';
 const ALT_ON = ESC + '[?1049h';
@@ -50,6 +51,7 @@ export const ACTIONS = [
   { key: 'f', label: 'Fork', needs: 'resumable' },
   { key: 'r', label: 'Remote', needs: 'resumable' },
   { key: 'y', label: 'Print cmd', needs: 'resumable' },
+  { key: 'n', label: 'New from this', needs: 'resumable' },
   { key: 'd', label: 'Untag', needs: 'tagged' },
   { key: 'a', label: 'Archive', needs: 'archivable' },
   { key: '/', label: 'Filter' },
@@ -57,6 +59,8 @@ export const ACTIONS = [
   { key: 't', label: 'Tag filter' },
   { key: '.', label: 'Show expired' },
   { key: 'c', label: 'This dir only', needs: 'cwd' },
+  { key: 'g', label: 'Tree', kind: 'toggle' },
+  { key: 'u', label: 'Go to parent', needs: 'parent' },
   { key: 'p', label: 'Preview' },
   { key: '?', label: 'Help' },
   { key: 'esc', label: 'Quit' },
@@ -83,7 +87,9 @@ export function menuFor(session) {
             ? Boolean(session && session.resumable && session.file && !session.archived)
             : a.needs === 'cwd'
               ? Boolean(session && session.cwd)
-              : true;
+              : a.needs === 'parent'
+                ? Boolean(session && session.parent)
+                : true;
     return { ...a, enabled };
   });
 }
@@ -169,7 +175,7 @@ function renderRow(s, cols, selected, tagCol) {
   const marker = selected ? '>' : ' ';
   const time = pad(relTime(s.updatedAt), timeCol);
   const msgs = pad(s.messages ? String(s.messages) : '-', msgCol);
-  const title = pad(s.label, titleCol);
+  const title = pad((s.depth ? '  '.repeat(s.depth - 1) + '\u2514 ' : '') + s.label, titleCol);
   const cwd = pad(homeShort(s.cwd), cwdCol);
   const tag = pad(tagText, tagCol);
 
@@ -267,7 +273,7 @@ function helpOverlay(cols, rows) {
   lines.push('');
   lines.push(c.bold('Moving'));
   lines.push(`  ${c.bold(pad('j k', 7))} Down / up (arrows work too)`);
-  lines.push(`  ${c.bold(pad('g G', 7))} First / last`);
+  lines.push(`  ${c.bold(pad('G', 7))} Last (home and end work too)`);
   lines.push(`  ${c.bold(pad('ctrl-d', 7))} Half a page down (ctrl-u for up)`);
   lines.push('');
   lines.push(c.bold('While filtering'));
@@ -288,7 +294,7 @@ function helpOverlay(cols, rows) {
  * line that truncated on a narrow terminal, so the features a new user most
  * needed pointing out were the first to disappear.
  */
-export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, dir = null, tag: taggedOnly = null, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
+export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, dir = null, tag: taggedOnly = null, tree = false, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -301,6 +307,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     const tagCycle = [null, '*', ...[...new Set(sessions.flatMap((x) => x.tags || []))].sort()];
     let tagAt = Math.max(0, tagCycle.indexOf(taggedOnly));
     let showExpired = expired;
+    let showTree = tree;
     // Narrowing to a directory is a toggle rather than a flag, so it has to
     // remember which directory it was narrowed to.
     let onlyDir = dir;
@@ -336,7 +343,10 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       if (tag === '*') list = list.filter((s) => (s.tags || []).length > 0);
       else if (tag) list = list.filter((s) => (s.tags || []).includes(tag));
       if (onlyDir) list = list.filter((s) => s.cwd === onlyDir);
-      filtered = query ? list.filter((s) => fuzzy(searchable(s), query)) : list;
+      list = query ? list.filter((s) => fuzzy(searchable(s), query)) : list;
+      // Nesting comes last so it only ever arranges what survived the filters,
+      // and a child whose parent was filtered out is promoted rather than lost.
+      filtered = showTree ? buildTree(list) : list;
       if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
     };
 
@@ -357,7 +367,8 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
         c.dim(`sort ${sort}`) +
           (tagCycle[tagAt] === '*' ? ' ' + c.magenta('tagged') : tagCycle[tagAt] ? ' ' + c.magenta('#' + tagCycle[tagAt]) : '') +
           (showExpired ? ' ' + c.magenta('expired') : '') +
-          (onlyDir ? ' ' + c.magenta(homeShort(onlyDir)) : ''),
+          (onlyDir ? ' ' + c.magenta(homeShort(onlyDir)) : '') +
+          (showTree ? ' ' + c.magenta('tree') : ''),
         mode === 'filter'
           ? c.cyan('/') + query + c.inverse(' ')
           : query
@@ -516,6 +527,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       if (key.name === 'f') return act('fork', 'f');
       if (key.name === 'r') return act('remote', 'r');
       if (key.name === 'y') return act('print', 'y');
+      if (key.name === 'n' && !key.ctrl) return act('derive', 'n');
 
       flash = '';
       if (key.name === 'd' && !key.ctrl && actions.untag) {
@@ -535,6 +547,15 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       else if (key.name === 'p' && !key.ctrl) showPreview = !showPreview;
       else if (key.name === 't') keepingCursor(() => (tagAt = (tagAt + 1) % tagCycle.length));
       else if (str === '.') keepingCursor(() => (showExpired = !showExpired));
+      else if (key.name === 'g' && !key.shift && !key.ctrl) keepingCursor(() => (showTree = !showTree));
+      else if (key.name === 'u' && !key.ctrl) {
+        const parent = filtered[cursor]?.parent;
+        const at = parent ? filtered.findIndex((x) => x.id === parent) : -1;
+        // The parent may be filtered out of the current view; say so rather
+        // than moving the cursor somewhere the user did not ask for.
+        if (at !== -1) cursor = at;
+        else if (parent) flash = 'the parent is not in this view';
+      }
       else if (key.name === 'c' && !key.ctrl) {
         const here = filtered[cursor]?.cwd;
         // Toggling off is unconditional, so a scope narrowed to a directory
@@ -548,7 +569,6 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
         });
       } else if (key.name === 'j' || key.name === 'down') cursor = Math.min(last, cursor + 1);
       else if (key.name === 'k' || key.name === 'up') cursor = Math.max(0, cursor - 1);
-      else if (key.name === 'g' && !key.shift) cursor = 0;
       else if (key.name === 'g' && key.shift) cursor = last;
       else if (key.ctrl && key.name === 'd') cursor = Math.min(last, cursor + page);
       else if (key.ctrl && key.name === 'u') cursor = Math.max(0, cursor - page);

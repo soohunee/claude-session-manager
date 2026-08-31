@@ -718,8 +718,13 @@ async function cmdPick(opts, rest, passthrough) {
     if (!process.stdout.isTTY) printList(sessions);
     return;
   }
-  // A key pressed in the picker refines what the flags asked for: ^r and ^f
-  // choose the mode, ^y only switches the result to a printed command.
+  // Deriving is its own command rather than a way of resuming, so it does not
+  // go through the mode below.
+  if (chosen.action === 'derive') {
+    return cmdDerive({ ...opts, session: chosen.session.id }, [], passthrough);
+  }
+  // A key pressed in the picker refines what the flags asked for: `r` and `f`
+  // choose the mode, `y` only switches the result to a printed command.
   const mode = chosen.action === 'remote' || chosen.action === 'fork' ? chosen.action : opts.mode;
   resume(chosen.session, passthrough, { mode, print: opts.print || chosen.action === 'print' });
 }

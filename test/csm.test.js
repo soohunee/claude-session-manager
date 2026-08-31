@@ -550,26 +550,28 @@ test('the compact menu always says how to see the rest', () => {
 });
 
 test('the menu answers what can be done with the highlighted session', () => {
-  const live = menuFor({ resumable: true, file: 'x', cwd: CWD, tags: ['keep'] });
-  const expired = menuFor({ resumable: false, cwd: CWD, tags: ['keep'] });
+  const live = menuFor({ resumable: true, file: 'x', cwd: CWD, tags: ['keep'], parent: 'p0' });
+  const expired = menuFor({ resumable: false, cwd: CWD, tags: ['keep'], parent: 'p0' });
   const on = (menu, key) => menu.find((a) => a.key === key).enabled !== false;
-  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'd', 'a', 'c']);
+  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'n', 'd', 'a', 'c', 'u']);
 
   // A live, tagged session can take everything.
   for (const a of live) assert.notEqual(a.enabled, false, `${a.key} should be live`);
   // An expired one has no transcript, so it cannot be resumed or archived, but
   // its tags are still csm's own and can still be dropped.
-  for (const key of ['enter', 'f', 'r', 'y', 'a']) {
+  for (const key of ['enter', 'f', 'r', 'y', 'n', 'a']) {
     assert.equal(on(expired, key), false, `${key} needs a transcript`);
   }
   assert.equal(on(expired, 'd'), true, 'tags outlive the transcript');
   // Keys that act on the view, not the session, never go dim.
-  for (const key of ['/', 's', 't', '.', 'p', '?', 'esc']) {
+  for (const key of ['/', 's', 't', '.', 'g', 'p', '?', 'esc']) {
     assert.equal(on(expired, key), true, `${key} should not depend on the session`);
   }
   assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'd'), false, 'nothing to untag');
   assert.equal(on(menuFor({ resumable: true, file: 'x', archived: true, tags: [] }), 'a'), false, 'already archived');
   assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'c'), false, 'no directory to narrow to');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', cwd: CWD, tags: [] }), 'u'), false, 'nothing to go up to');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', cwd: CWD, tags: [], parent: 'p1' }), 'u'), true);
   // An empty list still produces a readable menu rather than throwing.
   assert.equal(on(menuFor(undefined), 'enter'), false);
 });
@@ -730,4 +732,29 @@ test('narrowing to a directory can always be undone', async () => {
   assert.equal(narrowed.screen.includes('Over there'), false);
   const widened = await drivePicker([here, there], [{ name: 'c' }, { name: 'c' }]);
   assert.match(widened.screen, /Over there/);
+});
+
+test('the picker nests derived sessions and can jump to a parent', async () => {
+  const root = { ...LIVE, id: 'root', label: 'The original', tags: [], parent: null };
+  const kid = { ...LIVE, id: 'kid', label: 'Carried on', tags: [], parent: 'root', updatedAt: '2026-01-03T00:00:00.000Z' };
+  recordLink('kid', 'root');
+
+  // Flat, the child sorts above its parent by recency and reads as unrelated.
+  const flat = await drivePicker([kid, root], []);
+  assert.equal(/Carried on[\s\S]*The original/.test(flat.screen), true);
+  assert.equal(flat.screen.includes('\u2514 Carried on'), false);
+
+  const tree = await drivePicker([kid, root], [{ name: 'g' }]);
+  assert.match(tree.screen, /The original[\s\S]*\u2514 Carried on/, 'the child hangs off its parent');
+  assert.match(tree.screen, /tree/, 'and the state block says so');
+
+  // From the child, `u` moves the cursor onto the parent.
+  const jumped = await drivePicker([kid, root], [{ name: 'g' }, { name: 'j' }, { name: 'u' }]);
+  assert.match(jumped.screen, /^> .*The original/m);
+
+  // With the parent filtered out, the jump says so instead of moving somewhere
+  // the user did not ask for.
+  const alone = await drivePicker([kid], [{ name: 'u' }]);
+  assert.match(alone.screen, /parent is not in this view/);
+  removeLink('kid');
 });
