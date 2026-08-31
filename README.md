@@ -43,28 +43,36 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
-Claude sessions  29 sessions shown · 54 expired, transcript gone (-a to list)
-search> refactor
-──────────────────────────────────────────────────────────────────────────────
-> 2h ago   144  Billing refactor — split invoice service   ~/work/api   #billing
-  1d ago    88  Terraform for the new billing queue        ~/work/infra #billing
-  4d ago    31  Refactor the auth middleware               ~/work/api
-  1w ago   459  Refactoring notes and cleanup pass         ~/scratch
-──────────────────────────────────────────────────────────────────────────────
+ csm 0.1.2              enter  Resume          a      Archive         g      Tree
+ 4 shown · 54 expired   f      Fork            /      Filter          u      Go to parent
+ sort time              r      Remote          s      Sort            p      Preview
+ filter ref             y      Print cmd       t      Tag filter      ?      Help
+                        n      New from this   .      Show expired    esc    Quit
+                        d      Untag           c      This dir only
+───────────────────────────────────────────────────────────────────────────────────────────────────
+> 2h ago   144  Billing refactor — split invoice service    ~/work/api                   #billing
+  1d ago   88   Terraform for the new billing queue         ~/work/infra                 #billing
+  4d ago   31   Refactor the auth middleware                ~/work/api
+  1w ago   459  Refactoring notes and cleanup pass          ~/scratch
+
+───────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-08-29 14:08 · 144 messages · main
+2026-08-31 08:54 · 144 messages · main · archived
 ~/work/api
-0a1b2c3d-4e5f-6789-abcd-ef0123456789
+0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
 › extract the token check into middleware
 ‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
 ‹ The invoice service no longer imports the auth module directly.
-──────────────────────────────────────────────────────────────────────────────
-↑↓ move · enter resume · tab hide · ^a tagged · ^r remote · ^f fork · ^y cmd  sort:time  [1/4]
+
+───────────────────────────────────────────────────────────────────────────────────────────────────
+ NORMAL  [1/4]
 ```
 
 Press <kbd>Enter</kbd> and you are back in that conversation, in the right
-directory.
+directory. Everything else it can do is in the menu on the right, and the menu
+follows the highlighted session: keys that do not apply to it go dim rather than
+disappearing, so there is nothing to look up.
 
 ## Features
 
@@ -84,13 +92,15 @@ directory.
   handoffs stays legible instead of looking like unrelated sessions.
 - **Tags from inside Claude Code.** `/persist billing` marks the running session
   without leaving it.
-- **Fuzzy interactive picker.** Type to filter, arrow keys to move, Enter to
-  resume. Correct column alignment for wide characters.
+- **A picker that explains itself.** Every action is a single letter listed on
+  screen, and the list follows the highlighted session, so nothing has to be
+  learned before it can be used. Correct column alignment for wide characters.
 - **Preview panel.** <kbd>Tab</kbd> shows the tail of the conversation, led by
   the last prompt you typed — the fastest way to tell two similar titles apart.
-- **Sort and filter as you browse.** Order by recency, title, or working
-  directory, and narrow to just your tagged sessions, without leaving the
-  picker.
+- **Everything is reachable while browsing.** Sort, filter by tag, narrow to one
+  directory, show expired sessions, tag, untag, archive, derive: all of it is a
+  keypress inside the picker rather than a flag you have to know before you
+  start. The flags remain, for scripts.
 - **Resume however you need.** In place, as a fork that leaves the original
   untouched, or with Remote Control so you can carry on from your phone.
 - **Zero dependencies.** No network calls, no API keys; it only reads files
@@ -181,20 +191,37 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 
 ### Keys in the picker
 
+The picker lists these on screen, so this table is a reference rather than
+something to learn. Keys that do not apply to the highlighted session are shown
+dim, and <kbd>?</kbd> opens the full set at any time.
+
 | Key | Action |
 | --- | --- |
-| <kbd>↑</kbd> <kbd>↓</kbd> / <kbd>Ctrl</kbd>+<kbd>p</kbd> <kbd>Ctrl</kbd>+<kbd>n</kbd> | Move the selection |
-| <kbd>PgUp</kbd> <kbd>PgDn</kbd> / <kbd>Home</kbd> <kbd>End</kbd> | Jump |
-| any character | Filter |
-| <kbd>Ctrl</kbd>+<kbd>u</kbd> | Clear the query |
-| <kbd>Tab</kbd> | Toggle the preview panel |
-| <kbd>Ctrl</kbd>+<kbd>t</kbd> / <kbd>Ctrl</kbd>+<kbd>o</kbd> / <kbd>Ctrl</kbd>+<kbd>g</kbd> | Sort by time / title / directory |
-| <kbd>Ctrl</kbd>+<kbd>a</kbd> | Show only tagged sessions (toggle) |
 | <kbd>Enter</kbd> | Resume the selected session |
-| <kbd>Ctrl</kbd>+<kbd>r</kbd> | Resume it with Remote Control |
-| <kbd>Ctrl</kbd>+<kbd>f</kbd> | Resume it as a fork |
-| <kbd>Ctrl</kbd>+<kbd>y</kbd> | Print the resume command and exit |
-| <kbd>Esc</kbd> | Quit |
+| <kbd>f</kbd> | Resume it as a fork, leaving the original untouched |
+| <kbd>r</kbd> | Resume it with Remote Control |
+| <kbd>y</kbd> | Print the resume command and exit |
+| <kbd>n</kbd> | Derive a fresh session carrying a handoff from this one |
+| <kbd>d</kbd> | Remove its tags, and its archive with them (asks first) |
+| <kbd>a</kbd> | Archive it now |
+| <kbd>/</kbd> | Filter; <kbd>Enter</kbd> keeps the filter, <kbd>Esc</kbd> clears it |
+| <kbd>s</kbd> | Cycle the sort: time, title, directory |
+| <kbd>t</kbd> | Cycle the tag filter: off, any tag, then each tag in turn |
+| <kbd>.</kbd> | Show expired sessions |
+| <kbd>c</kbd> | Narrow to the selected session's directory |
+| <kbd>g</kbd> | Nest derived sessions under the ones they came from |
+| <kbd>u</kbd> | Go to the parent of the selected session |
+| <kbd>p</kbd> | Toggle the preview panel |
+| <kbd>j</kbd> <kbd>k</kbd> / <kbd>↑</kbd> <kbd>↓</kbd> | Move the selection |
+| <kbd>Ctrl</kbd>+<kbd>d</kbd> <kbd>Ctrl</kbd>+<kbd>u</kbd> | Half a page down / up |
+| <kbd>G</kbd> / <kbd>Home</kbd> <kbd>End</kbd> | Jump to the end or the start |
+| <kbd>?</kbd> | Show every key |
+| <kbd>Esc</kbd> <kbd>q</kbd> | Quit |
+
+Letters act on the session under the cursor, which is why filtering lives behind
+<kbd>/</kbd>. An unrecognised key does nothing rather than falling through to the
+filter: a <kbd>d</kbd> that sometimes untagged and sometimes searched would be
+worse than either rule on its own.
 
 ### Tagging from inside Claude Code
 

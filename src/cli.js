@@ -71,8 +71,12 @@ ${c.bold('OPTIONS')}
   -v, --version               Show version
 
 ${c.bold('PICKER KEYS')}
-  The picker lists its own keys on screen, and ${c.cyan('?')} opens the full set.
-  Bare letters act on the highlighted session; ${c.cyan('/')} starts filtering.
+  The picker lists its own keys on screen and dims the ones that do not apply
+  to the highlighted session, so there is nothing to memorise. ${c.cyan('?')} shows them
+  all. Bare letters act on the session; ${c.cyan('/')} starts filtering.
+
+  Everything the flags above do while browsing has a key: ${c.cyan('t')} tag filter,
+  ${c.cyan('.')} expired, ${c.cyan('c')} this directory, ${c.cyan('s')} sort, ${c.cyan('g')} tree, ${c.cyan('n')} derive, ${c.cyan('d')} untag.
 
 ${c.bold('EXAMPLES')}
   csm                         Browse everything, fuzzy-search, hit enter to resume
