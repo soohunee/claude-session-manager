@@ -657,10 +657,11 @@ function cmdSearch(opts, rest) {
 
 async function cmdPick(opts, rest, passthrough) {
   const query = rest.join(' ');
-  // The picker owns the tag toggle, so it needs the untagged sessions too;
-  // filtering them out here would make ^a unable to bring them back.
-  const pool = selectSessions({ ...opts, tagged: false }, null);
-  const sessions = opts.tagged ? pool.filter((s) => s.tags.length > 0) : pool;
+  // Expired, tagged and directory are toggles inside the picker now, so the
+  // pool it gets must still contain everything they can bring back. Applying
+  // them here would leave a key that can hide but never restore.
+  const pool = selectSessions({ ...opts, all: true, tagged: false, dir: null }, null);
+  const sessions = pool;
   // Count against everything on disk, not the filtered view, so the header
   // never claims there are no expired sessions when it simply hid them.
   const total = scanSessions();
@@ -709,7 +710,9 @@ async function cmdPick(opts, rest, passthrough) {
     query,
     preview: opts.preview,
     sort: opts.sort,
-    tagged: opts.tagged,
+    expired: opts.all,
+    dir: opts.dir,
+    tag: opts.tags.length === 1 ? opts.tags[0] : opts.tagged ? '*' : null,
   });
   if (!chosen) {
     if (!process.stdout.isTTY) printList(sessions);

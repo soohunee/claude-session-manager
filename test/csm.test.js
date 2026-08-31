@@ -550,10 +550,10 @@ test('the compact menu always says how to see the rest', () => {
 });
 
 test('the menu answers what can be done with the highlighted session', () => {
-  const live = menuFor({ resumable: true, file: 'x', tags: ['keep'] });
-  const expired = menuFor({ resumable: false, tags: ['keep'] });
+  const live = menuFor({ resumable: true, file: 'x', cwd: CWD, tags: ['keep'] });
+  const expired = menuFor({ resumable: false, cwd: CWD, tags: ['keep'] });
   const on = (menu, key) => menu.find((a) => a.key === key).enabled !== false;
-  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'd', 'a']);
+  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'd', 'a', 'c']);
 
   // A live, tagged session can take everything.
   for (const a of live) assert.notEqual(a.enabled, false, `${a.key} should be live`);
@@ -564,11 +564,12 @@ test('the menu answers what can be done with the highlighted session', () => {
   }
   assert.equal(on(expired, 'd'), true, 'tags outlive the transcript');
   // Keys that act on the view, not the session, never go dim.
-  for (const key of ['/', 's', 't', 'p', '?', 'esc']) {
+  for (const key of ['/', 's', 't', '.', 'p', '?', 'esc']) {
     assert.equal(on(expired, key), true, `${key} should not depend on the session`);
   }
   assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'd'), false, 'nothing to untag');
   assert.equal(on(menuFor({ resumable: true, file: 'x', archived: true, tags: [] }), 'a'), false, 'already archived');
+  assert.equal(on(menuFor({ resumable: true, file: 'x', tags: [] }), 'c'), false, 'no directory to narrow to');
   // An empty list still produces a readable menu rather than throwing.
   assert.equal(on(menuFor(undefined), 'enter'), false);
 });
@@ -592,7 +593,7 @@ test('a disabled key is dimmed as one piece', () => {
  * and staying open after one that acts in place — is to stand in for both and
  * put them back afterwards.
  */
-async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24 } = {}) {
+async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24, ...rest } = {}) {
   const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
   const { write, columns, rows: realRows } = process.stdout;
   const frames = [];
@@ -612,7 +613,7 @@ async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24
   process.stdout.columns = cols;
   process.stdout.rows = rows;
   try {
-    const pending = pick(sessions, { actions });
+    const pending = pick(sessions, { actions, ...rest });
     for (const k of keys) stdin.emit('keypress', k.str ?? null, k);
     // Snapshot before yielding. Every draw is synchronous, but the moment this
     // awaits, the test runner's own writes land in `frames` too.
@@ -620,6 +621,10 @@ async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24
     // Nothing resolves unless a key asked it to, so race the promise against a
     // turn of the loop rather than hanging when the picker is still open.
     const result = await Promise.race([pending, new Promise((r) => setImmediate(() => r('still-open')))]);
+    // Close a picker that is still open, so it takes its resize listener off
+    // the real stdout. Doing it before the restore keeps the escape codes it
+    // writes on the way out from reaching the terminal.
+    stdin.emit('keypress', null, { name: 'escape' });
     return { result, screen };
   } finally {
     Object.defineProperty(process, 'stdin', realStdin);
@@ -643,10 +648,10 @@ test('the picker refuses an action its menu has dimmed', async () => {
   // transcript. Each must be ignored rather than handing over a session with
   // nothing left to resume.
   for (const key of [{ name: 'return' }, { name: 'f' }, { name: 'r' }, { name: 'y' }]) {
-    const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, key]);
+    const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, key], { expired: true });
     assert.equal(result, 'still-open', `${key.name} should have been refused`);
   }
-  const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, { name: 'escape' }]);
+  const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'j' }, { name: 'escape' }], { expired: true });
   assert.equal(result, null, 'escape still quits');
 });
 
@@ -678,4 +683,51 @@ test('an in-place action reloads the list without losing the cursor', async () =
   assert.match(screen, /archived 1KB/);
   // Still on the session that was acted on, not reset to the top.
   assert.match(screen, /^> .*Live one/m);
+});
+
+test('the picker hides expired sessions until asked, and can bring them back', async () => {
+  const off = await drivePicker([LIVE, EXPIRED], []);
+  assert.equal(off.screen.includes('Expired one'), false, 'hidden by default');
+  const on = await drivePicker([LIVE, EXPIRED], [{ str: '.' }]);
+  assert.match(on.screen, /Expired one/);
+  assert.match(on.screen, /expired/, 'and the state block says so');
+  // The same key puts them away again, so the toggle is not one-way.
+  const back = await drivePicker([LIVE, EXPIRED], [{ str: '.' }, { str: '.' }]);
+  assert.equal(back.screen.includes('Expired one'), false);
+});
+
+test('the tag key cycles off, any tag, then each tag in turn', async () => {
+  const a = { ...LIVE, id: 'a', label: 'Has billing', tags: ['billing'] };
+  const b = { ...LIVE, id: 'b', label: 'Has ops', tags: ['ops'] };
+  const none = { ...LIVE, id: 'n', label: 'Has none', tags: [] };
+  const press = (n) => drivePicker([a, b, none], Array.from({ length: n }, () => ({ name: 't' })));
+
+  const off = await press(0);
+  for (const l of ['Has billing', 'Has ops', 'Has none']) assert.match(off.screen, new RegExp(l));
+
+  const any = await press(1);
+  assert.equal(any.screen.includes('Has none'), false, 'any tag excludes the untagged');
+
+  const billing = await press(2);
+  assert.match(billing.screen, /Has billing/);
+  assert.equal(billing.screen.includes('Has ops'), false);
+  assert.match(billing.screen, /#billing/, 'the state block names the tag');
+
+  const ops = await press(3);
+  assert.match(ops.screen, /Has ops/);
+  assert.equal(ops.screen.includes('Has billing'), false);
+
+  // Round trips back to showing everything rather than dead-ending.
+  const wrapped = await press(4);
+  for (const l of ['Has billing', 'Has ops', 'Has none']) assert.match(wrapped.screen, new RegExp(l));
+});
+
+test('narrowing to a directory can always be undone', async () => {
+  const here = { ...LIVE, id: 'h', label: 'In here', cwd: '/tmp/here' };
+  const there = { ...LIVE, id: 't', label: 'Over there', cwd: '/tmp/there' };
+  const narrowed = await drivePicker([here, there], [{ name: 'c' }]);
+  assert.match(narrowed.screen, /In here/);
+  assert.equal(narrowed.screen.includes('Over there'), false);
+  const widened = await drivePicker([here, there], [{ name: 'c' }, { name: 'c' }]);
+  assert.match(widened.screen, /Over there/);
 });

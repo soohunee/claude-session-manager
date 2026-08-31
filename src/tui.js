@@ -54,7 +54,9 @@ export const ACTIONS = [
   { key: 'a', label: 'Archive', needs: 'archivable' },
   { key: '/', label: 'Filter' },
   { key: 's', label: 'Sort' },
-  { key: 't', label: 'Tagged only' },
+  { key: 't', label: 'Tag filter' },
+  { key: '.', label: 'Show expired' },
+  { key: 'c', label: 'This dir only', needs: 'cwd' },
   { key: 'p', label: 'Preview' },
   { key: '?', label: 'Help' },
   { key: 'esc', label: 'Quit' },
@@ -79,7 +81,9 @@ export function menuFor(session) {
           ? Boolean(session && (session.tags || []).length)
           : a.needs === 'archivable'
             ? Boolean(session && session.resumable && session.file && !session.archived)
-            : true;
+            : a.needs === 'cwd'
+              ? Boolean(session && session.cwd)
+              : true;
     return { ...a, enabled };
   });
 }
@@ -284,7 +288,7 @@ function helpOverlay(cols, rows) {
  * line that truncated on a narrow terminal, so the features a new user most
  * needed pointing out were the first to disappear.
  */
-export function pick(sessions, { actions = {}, scope = '', subtitle = '', query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', tagged: taggedOnly = false, version = '' } = {}) {
+export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, dir = null, tag: taggedOnly = null, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -292,7 +296,14 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', query:
     let cursor = 0;
     let offset = 0;
     let showPreview = previewOn;
-    let onlyTagged = taggedOnly;
+    // `t` cycles rather than toggles, so narrowing to one tag does not need a
+    // flag: off, then any tag, then each tag in turn.
+    const tagCycle = [null, '*', ...[...new Set(sessions.flatMap((x) => x.tags || []))].sort()];
+    let tagAt = Math.max(0, tagCycle.indexOf(taggedOnly));
+    let showExpired = expired;
+    // Narrowing to a directory is a toggle rather than a flag, so it has to
+    // remember which directory it was narrowed to.
+    let onlyDir = dir;
     let sort = sortMode;
     let mode = 'normal';
     let overlay = null;
@@ -319,8 +330,13 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', query:
     };
 
     const applyFilter = () => {
-      const pool = onlyTagged ? ordered.filter((s) => (s.tags || []).length > 0) : ordered;
-      filtered = query ? pool.filter((s) => fuzzy(searchable(s), query)) : pool;
+      let list = ordered;
+      if (!showExpired) list = list.filter((s) => s.resumable);
+      const tag = tagCycle[tagAt];
+      if (tag === '*') list = list.filter((s) => (s.tags || []).length > 0);
+      else if (tag) list = list.filter((s) => (s.tags || []).includes(tag));
+      if (onlyDir) list = list.filter((s) => s.cwd === onlyDir);
+      filtered = query ? list.filter((s) => fuzzy(searchable(s), query)) : list;
       if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
     };
 
@@ -338,7 +354,10 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', query:
       const left = [
         c.bold('csm') + (version ? c.dim(' ' + version) : '') + (scope ? '  ' + c.magenta(scope) : ''),
         c.dim(subtitle || `${filtered.length} shown`),
-        c.dim(`sort ${sort}`) + (onlyTagged ? ' ' + c.magenta('tagged only') : ''),
+        c.dim(`sort ${sort}`) +
+          (tagCycle[tagAt] === '*' ? ' ' + c.magenta('tagged') : tagCycle[tagAt] ? ' ' + c.magenta('#' + tagCycle[tagAt]) : '') +
+          (showExpired ? ' ' + c.magenta('expired') : '') +
+          (onlyDir ? ' ' + c.magenta(homeShort(onlyDir)) : ''),
         mode === 'filter'
           ? c.cyan('/') + query + c.inverse(' ')
           : query
@@ -514,7 +533,14 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', query:
       } else if (str === '/') mode = 'filter';
       else if (str === '?') overlay = { kind: 'help' };
       else if (key.name === 'p' && !key.ctrl) showPreview = !showPreview;
-      else if (key.name === 't') keepingCursor(() => (onlyTagged = !onlyTagged));
+      else if (key.name === 't') keepingCursor(() => (tagAt = (tagAt + 1) % tagCycle.length));
+      else if (str === '.') keepingCursor(() => (showExpired = !showExpired));
+      else if (key.name === 'c' && !key.ctrl) {
+        const here = filtered[cursor]?.cwd;
+        // Toggling off is unconditional, so a scope narrowed to a directory
+        // whose sessions have all been filtered away can still be undone.
+        keepingCursor(() => (onlyDir = onlyDir ? null : here || null));
+      }
       else if (key.name === 's') {
         keepingCursor(() => {
           sort = SORT_MODES[(SORT_MODES.indexOf(sort) + 1) % SORT_MODES.length];
