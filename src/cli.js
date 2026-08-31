@@ -23,7 +23,7 @@ import { extractHandoff, summarizeHandoff, frameHandoff, writeHandoff } from './
 import { claudeHome, projectsDir, settingsFile, handoffDir } from './paths.js';
 import { pick } from './tui.js';
 import { searchTranscript, snippet } from './search.js';
-import { c, pad, truncate, relTime, plural } from './format.js';
+import { c, pad, truncate, relTime, plural, spinner, confirm } from './format.js';
 
 const pkg = JSON.parse(
   fs.readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')
@@ -63,6 +63,7 @@ ${c.bold('OPTIONS')}
       --json                  Machine-readable output
       --session <id>          Target this session id, matched on an id prefix
       --fast                  With \`derive\`: build the handoff without asking a model
+  -y, --yes                   With \`derive\`: do not ask before spending on the model
       --note <text>           With \`derive\`: extra instructions for the new session
       --model <name>          Model to write the handoff with (default: your usual one)
       --no-archive            With \`tag\`: record the tag but don't archive
@@ -93,7 +94,7 @@ Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
 
 export function parseArgs(argv) {
-  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, note: null, model: null };
+  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, yes: false, note: null, model: null };
   const rest = [];
   const passthrough = [];
   let i = 0;
@@ -121,6 +122,7 @@ export function parseArgs(argv) {
     else if (a === '--session') opts.session = argv[++i];
     else if (a === '--no-archive') opts.archive = false;
     else if (a === '--fast') opts.fast = true;
+    else if (a === '-y' || a === '--yes') opts.yes = true;
     else if (a === '--note') opts.note = argv[++i] || null;
     else if (a === '--model') opts.model = argv[++i] || null;
     else if (a === '--refresh') opts.refresh = true;
@@ -392,18 +394,45 @@ async function cmdDerive(opts, rest, passthrough) {
   let text = null;
   let cost = null;
   if (!opts.fast) {
-    console.log(c.dim(`Asking ${c.bold(truncate(parent.label, 40))} to write its own handoff…`));
-    const res = await summarizeHandoff(parent, { model: opts.model });
+    // Writing the handoff replays the entire parent conversation through the
+    // model, so it is billed like the conversation itself. Saying so before
+    // spending the money is the difference between a tool and a surprise.
+    const size = fs.existsSync(parent.file) ? fs.statSync(parent.file).size : 0;
+    console.log(`${c.bold(truncate(parent.label, 50))} ${c.dim(`· ${plural(parent.messages || 0, 'message')} · ${humanBytes(size)}`)}`);
+    console.log(
+      c.yellow('This asks the session to summarise itself, which re-reads the whole conversation') +
+        c.yellow(' in one API call.')
+    );
+    console.log(c.dim(`It is billed to your Claude account, and a transcript this size is not free.`));
+    console.log(c.dim(`${c.cyan('csm derive --fast')} builds the handoff from the transcript instead: instant, free, and`));
+    console.log(c.dim('records what happened rather than why.'));
+    if (!opts.yes && !(await confirm(c.bold('Write the handoff with the model?')))) {
+      console.log(c.dim(process.stdin.isTTY ? 'Stopped. Nothing was spent.' : 'Not a terminal — pass --yes to go ahead, or --fast to skip the model.'));
+      return;
+    }
+
+    const phases = {
+      loading: 'reading the conversation',
+      waiting: 'the model is reading it',
+      writing: 'writing the handoff',
+    };
+    const spin = spinner(phases.loading);
+    const res = await summarizeHandoff(parent, {
+      model: opts.model,
+      onPhase: (phase) => spin.update(phases[phase] || phase),
+    });
+    const took = spin.elapsed();
+    spin.stop();
     if (res.ok) {
       text = res.text;
       cost = res.cost;
+      console.log(c.green('handoff written') + c.dim(` · ${took}`) + (res.cost != null ? c.dim(` · $${res.cost.toFixed(4)}`) : ''));
     } else {
-      console.log(c.yellow(`  the model could not summarise it (${res.reason})`));
-      console.log(c.dim('  falling back to a handoff extracted from the transcript'));
+      console.log(c.yellow(`The model could not summarise it: ${res.reason}`));
+      console.log(c.dim('Falling back to a handoff extracted from the transcript.'));
     }
   }
   const mdPath = writeHandoff(parent.id, text ? frameHandoff(parent, text) : extractHandoff(parent));
-  if (cost != null) console.log(c.dim(`  handoff written · $${cost.toFixed(4)}`));
 
   // The parent is now the root of a tree, so it has to outlive Claude Code's
   // cleanup whether or not anyone remembered to tag it.
@@ -427,8 +456,7 @@ async function cmdDerive(opts, rest, passthrough) {
 
   console.log(
     `${c.green('derived')} ${c.dim(child.slice(0, 8))} ${c.dim('from')} ${c.dim(parent.id.slice(0, 8))} ` +
-      c.dim(`· handoff at ${homeShort(mdPath)}`) +
-      (cost != null ? c.dim(` · $${cost.toFixed(4)}`) : '')
+      c.dim(`· handoff at ${homeShort(mdPath)}`)
   );
   const proc = spawn('claude', args, { cwd: parent.cwd, stdio: 'inherit' });
   proc.on('error', (err) => {
