@@ -20,7 +20,7 @@ const { width, truncate, pad, relTime, c } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
-const { pick, layoutMenu, compactMenu, menuFor, ACTIONS } = await import('../src/tui.js');
+const { pick, layoutMenu, compactMenu, menuFor, shortPath, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
 const { parseArgs, selectSessions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
@@ -757,4 +757,43 @@ test('the picker nests derived sessions and can jump to a parent', async () => {
   const alone = await drivePicker([kid], [{ name: 'u' }]);
   assert.match(alone.screen, /parent is not in this view/);
   removeLink('kid');
+});
+
+test('a path is shortened from the front, so the project name survives', () => {
+  const home = process.env.HOME;
+  const p = `${home}/Desktop/develop/claude-session-manager`;
+  assert.equal(shortPath(p, 60), '~/Desktop/develop/claude-session-manager');
+  // Cutting from the end would leave "~/Desktop/develop/claude-sess…", which
+  // says nothing about which project this is.
+  const cut = shortPath(p, 26);
+  assert.equal(cut, '\u2026/claude-session-manager');
+  assert.ok(width(cut) <= 26);
+  // Keeps adding parents while they fit.
+  assert.equal(shortPath(p, 34), '\u2026/develop/claude-session-manager');
+  // A single segment too long for the column still has to fit it.
+  assert.ok(width(shortPath('/a-very-long-single-directory-name', 12)) <= 12);
+});
+
+test('every key in the menu explains itself', () => {
+  for (const a of ACTIONS) {
+    assert.ok(a.help && a.help.length > 10, `${a.key} needs a help line`);
+    assert.notEqual(a.help.toLowerCase(), a.label.toLowerCase(), `${a.key} help must add something`);
+  }
+  // Resume and its copy are the pair people cannot tell apart, so each has to
+  // say what happens to the original.
+  const fork = ACTIONS.find((a) => a.key === 'f');
+  assert.match(fork.label + ' ' + fork.help, /copy|branch/i);
+  assert.match(fork.help, /leaving this one|original/i);
+});
+
+test('the picker prints a directory once per run of rows that share it', async () => {
+  const here = { ...LIVE, id: '1', label: 'One', cwd: '/tmp/same', tags: [] };
+  const also = { ...LIVE, id: '2', label: 'Two', cwd: '/tmp/same', tags: [], updatedAt: '2026-01-01T00:00:00.000Z' };
+  const other = { ...LIVE, id: '3', label: 'Three', cwd: '/tmp/other', tags: [], updatedAt: '2025-12-31T00:00:00.000Z' };
+  const { screen } = await drivePicker([here, also, other], []);
+  const rows = screen.split('\n').filter((l) => /One|Two|Three/.test(l));
+  assert.equal(rows.length, 3);
+  assert.match(rows[0], /same/, 'the first row of a run carries the directory');
+  assert.equal(/same|other/.test(rows[1]), false, 'the repeat is left blank');
+  assert.match(rows[2], /other/, 'a new directory starts a new run');
 });

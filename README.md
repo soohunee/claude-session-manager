@@ -43,21 +43,21 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.2.0              enter  Resume          a      Archive         g      Tree
- 4 shown · 54 expired   f      Fork            /      Filter          u      Go to parent
- sort time              r      Remote          s      Sort            p      Preview
- filter ref             y      Print cmd       t      Tag filter      ?      Help
-                        n      New from this   .      Show expired    esc    Quit
-                        d      Untag           c      This dir only
-───────────────────────────────────────────────────────────────────────────────────────────────────
-> 2h ago   144  Billing refactor — split invoice service    ~/work/api                   #billing
-  1d ago   88   Terraform for the new billing queue         ~/work/infra                 #billing
-  4d ago   31   Refactor the auth middleware                ~/work/api
-  1w ago   459  Refactoring notes and cleanup pass          ~/scratch
+ csm 0.2.1              enter  Resume           a      Archive          g      Tree
+ 4 shown · 54 expired   f      Resume a copy    /      Filter           u      Go to parent
+ sort time              r      Remote control   s      Sort             p      Preview
+ filter ref             y      Print cmd        t      Tag filter       ?      Help
+                        n      New from this    .      Show expired     esc    Quit
+                        d      Untag            c      This dir only
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> 2h ago   144  Billing refactor — split invoice service       ~/work/api                    #billing
+  1d ago   88   Terraform for the new billing queue            ~/work/infra                  #billing
+  4d ago   31   Refactor the auth middleware                   ~/work/api
+  1w ago   459  Refactoring notes and cleanup pass             ~/scratch
 
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-08-31 08:54 · 144 messages · main · archived
+2026-08-31 13:11 · 144 messages · main · archived
 ~/work/api
 0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
@@ -65,7 +65,7 @@ Billing refactor — split invoice service
 ‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
 ‹ The invoice service no longer imports the auth module directly.
 
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────
  NORMAL  [1/4]
 ```
 
@@ -199,6 +199,7 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `--json` | Machine-readable output |
 | `--session <id>` | Target this session id, matched on an id prefix |
 | `--fast` | With `derive`: build the handoff without asking a model |
+| `-y, --yes` | With `derive`: do not ask before spending on the model |
 | `--note <text>` | With `derive`: extra instructions for the new session |
 | `--model <name>` | Model to write the handoff with (default: your usual one) |
 | `--no-archive` | With `tag`: record the tag but do not archive |
@@ -210,13 +211,13 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 
 The picker lists these on screen, so this table is a reference rather than
 something to learn. Keys that do not apply to the highlighted session are shown
-dim, and <kbd>?</kbd> opens the full set at any time.
+dim, and <kbd>?</kbd> explains every one of them in a sentence.
 
 | Key | Action |
 | --- | --- |
 | <kbd>Enter</kbd> | Resume the selected session |
-| <kbd>f</kbd> | Resume it as a fork, leaving the original untouched |
-| <kbd>r</kbd> | Resume it with Remote Control |
+| <kbd>f</kbd> | Resume a copy: branch under a new id, leaving this one as it is |
+| <kbd>r</kbd> | Resume with Remote Control, to carry on from your phone |
 | <kbd>y</kbd> | Print the resume command and exit |
 | <kbd>n</kbd> | Derive a fresh session carrying a handoff from this one |
 | <kbd>d</kbd> | Remove its tags, and its archive with them (asks first) |
@@ -269,6 +270,13 @@ csm derive 557dac2e           # or any session, matched on an id prefix
 csm derive --fast             # skip the model, build the handoff from the transcript
 csm derive --note "Start with the failing test."
 ```
+
+Writing the handoff replays the whole parent conversation through the model in
+one API call, billed to your Claude account, so `derive` says what it is about
+to spend on and asks first. `--yes` skips the question. While it runs it reports
+which phase it is in — reading the conversation, the model reading it, writing
+the handoff — because loading a multi-megabyte transcript happens before the
+model is reached, and a silent run looks the same whether it is working or hung.
 
 It forks the parent to write the handoff, so the parent transcript is left
 exactly as it was — the summary request never becomes part of the conversation

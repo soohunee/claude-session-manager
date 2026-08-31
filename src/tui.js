@@ -16,6 +16,28 @@ function homeShort(p) {
   return home && p && p.startsWith(home) ? '~' + p.slice(home.length) : p || '?';
 }
 
+/**
+ * Fit a path into a column by dropping leading segments, not trailing ones.
+ *
+ * `truncate` would give `~/Desktop/develop/claude-sess…`, which throws away the
+ * only part that says which project this is. Every session in a tree of work
+ * shares its leading segments; the tail is what tells them apart.
+ */
+export function shortPath(p, max) {
+  const full = homeShort(p);
+  if (width(full) <= max) return full;
+  const parts = full.split('/');
+  let out = parts[parts.length - 1];
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const next = parts[i] + '/' + out;
+    if (width('…/' + next) > max) break;
+    out = next;
+  }
+  const marked = '…/' + out;
+  // A single segment can still be too long for the column on its own.
+  return width(marked) <= max ? marked : truncate(full, max);
+}
+
 /** Subsequence match — every query char appears in order. Cheap and forgiving. */
 function fuzzy(haystack, needle) {
   if (!needle) return true;
@@ -47,23 +69,23 @@ function searchable(s) {
  * overlay, and a key that is not in it does nothing.
  */
 export const ACTIONS = [
-  { key: 'enter', label: 'Resume', needs: 'resumable' },
-  { key: 'f', label: 'Fork', needs: 'resumable' },
-  { key: 'r', label: 'Remote', needs: 'resumable' },
-  { key: 'y', label: 'Print cmd', needs: 'resumable' },
-  { key: 'n', label: 'New from this', needs: 'resumable' },
-  { key: 'd', label: 'Untag', needs: 'tagged' },
-  { key: 'a', label: 'Archive', needs: 'archivable' },
-  { key: '/', label: 'Filter' },
-  { key: 's', label: 'Sort' },
-  { key: 't', label: 'Tag filter' },
-  { key: '.', label: 'Show expired' },
-  { key: 'c', label: 'This dir only', needs: 'cwd' },
-  { key: 'g', label: 'Tree', kind: 'toggle' },
-  { key: 'u', label: 'Go to parent', needs: 'parent' },
-  { key: 'p', label: 'Preview' },
-  { key: '?', label: 'Help' },
-  { key: 'esc', label: 'Quit' },
+  { key: 'enter', label: 'Resume', needs: 'resumable', help: 'Carry on in this session; what you say next is added to it' },
+  { key: 'f', label: 'Resume a copy', needs: 'resumable', help: 'Branch: continue under a new id, leaving this one exactly as it is' },
+  { key: 'r', label: 'Remote control', needs: 'resumable', help: 'Resume with Remote Control, to carry on from your phone' },
+  { key: 'y', label: 'Print cmd', needs: 'resumable', help: 'Print the command that would resume it, and quit' },
+  { key: 'n', label: 'New from this', needs: 'resumable', help: 'Hand this session to a fresh one, for when it has filled up' },
+  { key: 'd', label: 'Untag', needs: 'tagged', help: 'Remove its tags; the archived copy goes with the last one' },
+  { key: 'a', label: 'Archive', needs: 'archivable', help: 'Keep a copy that outlives Claude Code deleting the transcript' },
+  { key: '/', label: 'Filter', help: 'Type to narrow the list; enter keeps the filter, esc clears it' },
+  { key: 's', label: 'Sort', help: 'Cycle the order: time, title, directory' },
+  { key: 't', label: 'Tag filter', help: 'Cycle: everything, anything tagged, then one tag at a time' },
+  { key: '.', label: 'Show expired', help: 'Include sessions Claude Code has already deleted the transcript of' },
+  { key: 'c', label: 'This dir only', needs: 'cwd', help: "Narrow to the selected session's directory, and back again" },
+  { key: 'g', label: 'Tree', help: 'Nest sessions under the ones they were derived from' },
+  { key: 'u', label: 'Go to parent', needs: 'parent', help: 'Move to the session this one was derived from' },
+  { key: 'p', label: 'Preview', help: 'Show the tail of the conversation under the list' },
+  { key: '?', label: 'Help', help: 'This screen' },
+  { key: 'esc', label: 'Quit', help: 'Leave csm; q works too' },
 ];
 
 /**
@@ -106,6 +128,10 @@ export function layoutMenu(entries, avail, gap = 3) {
   const keyCol = Math.max(...entries.map((e) => width(e.key)));
   const labelCol = Math.max(...entries.map((e) => width(e.label)));
   const colWidth = keyCol + 2 + labelCol + gap;
+  // Not even one column fits. Returning nothing hands the caller over to the
+  // compact line, which drops whole entries; forcing a column here would have
+  // overflowed the width instead, which is the one thing the layout must not do.
+  if (colWidth - gap > avail) return [];
   const columns = Math.max(1, Math.min(entries.length, Math.floor((avail + gap) / colWidth)));
   const rows = Math.ceil(entries.length / columns);
 
@@ -165,7 +191,7 @@ function tagWidth(page, cols) {
   return Math.min(widest, Math.max(0, Math.floor(cols * 0.2)));
 }
 
-function renderRow(s, cols, selected, tagCol) {
+function renderRow(s, cols, selected, tagCol, repeated = false) {
   const timeCol = 9;
   const msgCol = 5;
   const tagText = tagsOf(s);
@@ -176,7 +202,10 @@ function renderRow(s, cols, selected, tagCol) {
   const time = pad(relTime(s.updatedAt), timeCol);
   const msgs = pad(s.messages ? String(s.messages) : '-', msgCol);
   const title = pad((s.depth ? '  '.repeat(s.depth - 1) + '\u2514 ' : '') + s.label, titleCol);
-  const cwd = pad(homeShort(s.cwd), cwdCol);
+  // Repeating the directory down every row spends the widest column on the one
+  // thing those rows have in common. Printed once per run of rows that share
+  // it, the column starts carrying information again.
+  const cwd = pad(repeated ? '' : shortPath(s.cwd, cwdCol), cwdCol);
   const tag = pad(tagText, tagCol);
 
   const body = `${marker} ${time}${msgs}${title} ${cwd}${tag}`;
@@ -264,23 +293,19 @@ function drawBox(lines, cols, title, body, hint) {
 }
 
 function helpOverlay(cols, rows) {
-  const lines = [c.bold('Keys'), ''];
-  for (const a of ACTIONS) lines.push(`  ${c.bold(pad(a.key, 7))} ${a.label}`);
+  const keyCol = Math.max(...ACTIONS.map((a) => width(a.key)));
+  const labelCol = Math.max(...ACTIONS.map((a) => width(a.label)));
+  const lines = [c.bold(' Keys'), ''];
+  for (const a of ACTIONS) {
+    lines.push(
+      '  ' + c.bold(pad(a.key, keyCol)) + '  ' + pad(a.label, labelCol) + '  ' + c.dim(truncate(a.help, Math.max(10, cols - keyCol - labelCol - 8)))
+    );
+  }
   lines.push('');
-  lines.push(c.dim('  A key shown dim does not apply to the highlighted session.'));
-  lines.push(c.dim('  Untagging deletes the archived copy too, so it asks first.'));
-  lines.push(c.dim('  Expired sessions have no transcript left, so they cannot be resumed.'));
+  lines.push(c.dim('  A key shown dim in the menu does not apply to the highlighted session.'));
+  lines.push(c.dim('  Move with j k or the arrows, ctrl-d and ctrl-u by half a page, G to the end.'));
   lines.push('');
-  lines.push(c.bold('Moving'));
-  lines.push(`  ${c.bold(pad('j k', 7))} Down / up (arrows work too)`);
-  lines.push(`  ${c.bold(pad('G', 7))} Last (home and end work too)`);
-  lines.push(`  ${c.bold(pad('ctrl-d', 7))} Half a page down (ctrl-u for up)`);
-  lines.push('');
-  lines.push(c.bold('While filtering'));
-  lines.push(`  ${c.bold(pad('enter', 7))} Back to the list, keeping the filter`);
-  lines.push(`  ${c.bold(pad('esc', 7))} Back to the list, clearing it`);
-  lines.push('');
-  lines.push(c.dim('Any key closes this.'));
+  lines.push(c.dim('  Any key closes this.'));
   return lines.slice(0, rows).map((l) => truncate(l, cols - 1));
 }
 
@@ -417,7 +442,10 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       const tagCol = tagWidth(page, cols);
       for (let i = 0; i < listHeight; i++) {
         const s = page[i];
-        lines.push(s ? renderRow(s, cols, offset + i === cursor, tagCol) : '');
+        // The first row of a page always prints its directory, so scrolling
+        // never leaves the column blank with nothing above it to inherit from.
+        const repeated = i > 0 && page[i - 1] && page[i - 1].cwd === s?.cwd;
+        lines.push(s ? renderRow(s, cols, offset + i === cursor, tagCol, repeated) : '');
       }
       lines.push(rule);
 
