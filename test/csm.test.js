@@ -22,7 +22,7 @@ const { parseTranscript, scanSessions, sortSessions, isUnnamed } = await import(
 const { tailMessages } = await import('../src/preview.js');
 const { pick, layoutMenu, compactMenu, menuFor, shortPath, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
-const { parseArgs, selectSessions } = await import('../src/cli.js');
+const { parseArgs, selectSessions, buildDeriveArgs } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
 const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
@@ -979,4 +979,51 @@ test('--context-window accepts k, m and a plain number, and refuses nonsense', (
   assert.equal(parseArgs(['--context-window', '1m']).opts.contextWindow, 1000000);
   assert.equal(parseArgs(['--context-window', '500000']).opts.contextWindow, 500000);
   assert.equal(parseArgs([]).opts.contextWindow, null);
+});
+
+test('the derive prompt is never left where --add-dir can swallow it', () => {
+  // `--add-dir <directories...>` is variadic, so every non-option argument that
+  // follows it is read as another directory. With the prompt last, Claude Code
+  // received no prompt at all and opened an empty session — silently, because
+  // interactive mode has no missing-prompt error to show.
+  const big = buildDeriveArgs('kid', '/h/handoff.md', { read: () => 'x'.repeat(70000) });
+  assert.equal(big.inlined, false, 'too large to carry, so it points at the path');
+  const addDir = big.args.indexOf('--add-dir');
+  assert.ok(addDir !== -1);
+  assert.equal(big.args.indexOf(big.seed), 0, 'the prompt must come first');
+  assert.equal(addDir, big.args.length - 2, '--add-dir must be last, with only its own value after it');
+  assert.match(big.seed, /Read \/h\/handoff\.md/);
+});
+
+test('a handoff small enough travels in the prompt itself', () => {
+  const doc = '# Handoff — Billing\n\nWe moved the token check into requireToken.';
+  const { args, seed, inlined } = buildDeriveArgs('kid', '/h/handoff.md', { read: () => doc, note: 'Start with the failing test.' });
+  assert.equal(inlined, true);
+  // No file to read means no tool call to make, nothing to decline, and no
+  // reason to hand out directory access.
+  assert.equal(args.includes('--add-dir'), false);
+  assert.match(seed, /requireToken/);
+  assert.equal(seed.includes('/h/handoff.md'), false, 'no need to name a file it is already holding');
+  assert.match(seed, /Start with the failing test\./, 'the note still rides along');
+  assert.deepEqual(args.slice(1), ['--session-id', 'kid']);
+});
+
+test('extra arguments are passed through without displacing the prompt', () => {
+  const { args, seed } = buildDeriveArgs('kid', '/h/handoff.md', {
+    read: () => 'small',
+    passthrough: ['--model', 'opus'],
+  });
+  assert.equal(args[0], seed);
+  assert.deepEqual(args.slice(1), ['--session-id', 'kid', '--model', 'opus']);
+});
+
+test('a handoff that cannot be read still produces a usable prompt', () => {
+  const { args, seed, inlined } = buildDeriveArgs('kid', '/h/gone.md', {
+    read: () => {
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(inlined, false);
+  assert.match(seed, /Read \/h\/gone\.md/);
+  assert.ok(args.includes('--add-dir'));
 });

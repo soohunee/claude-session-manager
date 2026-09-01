@@ -294,6 +294,11 @@ which phase it is in — reading the conversation, the model reading it, writing
 the handoff — because loading a multi-megabyte transcript happens before the
 model is reached, and a silent run looks the same whether it is working or hung.
 
+The new session opens with the handoff already in its first message rather than
+a path to go and read, so it knows where things stand from the first token,
+with no tool call to make and nothing to approve. A handoff too large to carry
+that way is referenced by path instead.
+
 It forks the parent to write the handoff, so the parent transcript is left
 exactly as it was — the summary request never becomes part of the conversation
 you are trying to preserve. The handoff lands in `~/.claude/csm/handoff/`, the
