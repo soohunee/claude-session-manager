@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scanSessions, sortSessions, isUnnamed, SORT_MODES } from './scan.js';
 import { loadTags, addTags, removeTags, normalizeTag, ensureHome, readJson } from './store.js';
-import { archiveSession, restoreSession, removeArchive, archiveStats, humanBytes, isArchived } from './archive.js';
+import { archiveSession, restoreSession, removeArchive, archiveStats } from './archive.js';
 import {
   installHooks,
   uninstallHooks,
@@ -23,7 +23,7 @@ import { extractHandoff, summarizeHandoff, frameHandoff, writeHandoff } from './
 import { claudeHome, projectsDir, settingsFile, handoffDir } from './paths.js';
 import { pick } from './tui.js';
 import { searchTranscript, snippet } from './search.js';
-import { c, pad, truncate, relTime, plural, spinner, confirm } from './format.js';
+import { c, pad, truncate, relTime, plural, humanBytes, spinner, confirm } from './format.js';
 
 const pkg = JSON.parse(
   fs.readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')
@@ -435,6 +435,18 @@ async function cmdDerive(opts, rest, passthrough) {
       console.log(c.dim('Falling back to a handoff extracted from the transcript.'));
     }
   }
+  return finishDerive(parent, passthrough, { text, cost, opts });
+}
+
+/**
+ * Everything after the handoff exists: write it down, record the lineage, and
+ * hand the terminal to Claude Code.
+ *
+ * Split out because the picker gets here having already asked the question and
+ * waited for the summary in its own window, and should not have to repeat
+ * either on the way out.
+ */
+function finishDerive(parent, passthrough, { text = null, cost = null, opts = {} } = {}) {
   const mdPath = writeHandoff(parent.id, text ? frameHandoff(parent, text) : extractHandoff(parent));
 
   // The parent is now the root of a tree, so it has to outlive Claude Code's
@@ -459,7 +471,8 @@ async function cmdDerive(opts, rest, passthrough) {
 
   console.log(
     `${c.green('derived')} ${c.dim(child.slice(0, 8))} ${c.dim('from')} ${c.dim(parent.id.slice(0, 8))} ` +
-      c.dim(`· handoff at ${homeShort(mdPath)}`)
+      c.dim(`· handoff at ${homeShort(mdPath)}`) +
+      (cost != null ? c.dim(` · $${cost.toFixed(4)}`) : '')
   );
   const proc = spawn('claude', args, { cwd: parent.cwd, stdio: 'inherit' });
   proc.on('error', (err) => {
@@ -733,6 +746,12 @@ async function cmdPick(opts, rest, passthrough) {
       if (!res.ok) return `could not archive: ${res.reason}`;
       return res.skipped ? 'archive already up to date' : `archived ${humanBytes(res.bytes)}`;
     },
+    // Handed in so the picker can ask the question and show the wait in its own
+    // window, without reaching into how a handoff is actually written.
+    summarize(session, onPhase) {
+      if (session.source === 'archive' || !session.file || !fs.existsSync(session.file)) restoreSession(session);
+      return summarizeHandoff(session, { model: opts.model, onPhase });
+    },
   };
 
   const chosen = await pick(pool, {
@@ -755,7 +774,12 @@ async function cmdPick(opts, rest, passthrough) {
   // Deriving is its own command rather than a way of resuming, so it does not
   // go through the mode below.
   if (chosen.action === 'derive') {
-    return cmdDerive({ ...opts, session: chosen.session.id }, [], passthrough);
+    if (chosen.warning) console.log(c.yellow(`The model could not summarise it: ${chosen.warning}`) + c.dim(' — using the transcript instead.'));
+    return finishDerive(chosen.session, passthrough, {
+      text: chosen.handoff?.text ?? null,
+      cost: chosen.handoff?.cost ?? null,
+      opts,
+    });
   }
   // A key pressed in the picker refines what the flags asked for: `r` and `f`
   // choose the mode, `y` only switches the result to a printed command.

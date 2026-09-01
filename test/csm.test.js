@@ -843,3 +843,47 @@ test('the picker hides unnamed sessions, says how many, and can show them', asyn
   assert.match(shown.screen, /\/plugins/);
   assert.equal(shown.screen.includes('unnamed hidden'), false);
 });
+
+test('the list is labelled, and the labels line up with the rows', async () => {
+  const { screen } = await drivePicker([LIVE, { ...LIVE, id: 'b', label: 'Second' }], []);
+  const header = screen.split('\n').find((l) => /\bwhen\b/.test(l));
+  assert.ok(header, 'the list needs a header');
+  for (const label of ['when', 'msgs', 'title', 'directory']) assert.match(header, new RegExp(label));
+  const row = screen.split('\n').find((l) => /Live one/.test(l));
+  // The header is computed from the same widths as the row, so the title starts
+  // in the same cell on both.
+  assert.equal(header.indexOf('title'), row.indexOf('Live one'));
+});
+
+test('deriving asks inside the picker and offers the free route', async () => {
+  let summarised = 0;
+  const actions = { summarize: () => (summarised++, Promise.resolve({ ok: true, text: 'done', cost: 0.1 })) };
+
+  const asked = await drivePicker([LIVE], [{ name: 'n' }], { actions });
+  assert.match(asked.screen, /New session from this one/);
+  // The box wraps, so assert on phrases a line break cannot split.
+  assert.match(asked.screen, /one API call/, 'it must say what it is about to do');
+  assert.match(asked.screen, /billed to your/, 'it must say it costs money');
+  assert.match(asked.screen, /y model . f transcript/);
+  assert.equal(summarised, 0, 'nothing runs until the question is answered');
+
+  // Any other key cancels, so `n` cannot spend money by itself.
+  const cancelled = await drivePicker([LIVE], [{ name: 'n' }, { str: 'x', name: 'x' }], { actions });
+  assert.equal(summarised, 0);
+  assert.equal(cancelled.result, 'still-open');
+
+  // `f` skips the model entirely and leaves with no handoff to carry.
+  const fast = await drivePicker([LIVE], [{ name: 'n' }, { str: 'f', name: 'f' }], { actions });
+  assert.equal(summarised, 0, 'the fast route never reaches the model');
+  assert.equal(fast.result.action, 'derive');
+  assert.equal(fast.result.handoff, null);
+});
+
+test('a failed summary still derives, from the transcript', async () => {
+  const actions = { summarize: () => Promise.resolve({ ok: false, reason: 'context too long' }) };
+  const { result } = await drivePicker([LIVE], [{ name: 'n' }, { str: 'y', name: 'y' }], { actions });
+  // Stopping here would throw away a decision the user has already made.
+  assert.equal(result.action, 'derive');
+  assert.equal(result.handoff, null);
+  assert.equal(result.warning, 'context too long');
+});

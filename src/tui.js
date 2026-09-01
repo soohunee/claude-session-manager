@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { width, truncate, pad, relTime, c } from './format.js';
+import { width, truncate, pad, relTime, humanBytes, c } from './format.js';
 import { tailMessages } from './preview.js';
 import { sortSessions, isUnnamed, SORT_MODES } from './scan.js';
 import { buildTree } from './links.js';
@@ -192,12 +192,30 @@ function tagWidth(page, cols) {
   return Math.min(widest, Math.max(0, Math.floor(cols * 0.2)));
 }
 
+/**
+ * One set of column widths for the header and every row.
+ *
+ * They were computed inside the row renderer, which was fine while nothing else
+ * needed them; a header that works out its own widths is a header that drifts
+ * out of line with the thing it labels.
+ */
+function columns(cols, tagCol) {
+  const time = 9;
+  const msgs = 5;
+  const cwd = Math.max(12, Math.min(30, Math.floor(cols * 0.28)));
+  return { time, msgs, cwd, title: Math.max(10, cols - time - msgs - cwd - tagCol - 6) };
+}
+
+/** The column labels. `msgs` is the one nobody can guess from the numbers. */
+function renderHeader(cols, tagCol) {
+  const w = columns(cols, tagCol);
+  const line = `  ${pad('when', w.time)}${pad('msgs', w.msgs)}${pad('title', w.title)} ${pad('directory', w.cwd)}${pad(tagCol ? ' tags' : '', tagCol)}`;
+  return c.dim(line);
+}
+
 function renderRow(s, cols, selected, tagCol, repeated = false) {
-  const timeCol = 9;
-  const msgCol = 5;
+  const { time: timeCol, msgs: msgCol, cwd: cwdCol, title: titleCol } = columns(cols, tagCol);
   const tagText = tagsOf(s);
-  const cwdCol = Math.max(12, Math.min(30, Math.floor(cols * 0.28)));
-  const titleCol = Math.max(10, cols - timeCol - msgCol - cwdCol - tagCol - 6);
 
   const marker = selected ? '>' : ' ';
   const time = pad(relTime(s.updatedAt), timeCol);
@@ -266,6 +284,23 @@ function renderPreview(s, cols, height, cache) {
   return lines.slice(0, height);
 }
 
+/** Break a paragraph onto lines that fit, without cutting a word in half. */
+function wrapText(text, max) {
+  const out = [];
+  let line = '';
+  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+    const next = line ? line + ' ' + word : word;
+    if (width(next) > max && line) {
+      out.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
 /**
  * Draw a box over the middle of the screen, leaving the list visible around it.
  *
@@ -276,7 +311,8 @@ function renderPreview(s, cols, height, cache) {
  */
 function drawBox(lines, cols, title, body, hint) {
   const content = [title, '', ...body, '', hint];
-  const inner = Math.min(Math.max(...content.map(width)) + 2, Math.max(20, cols - 8));
+  const room = Math.max(20, Math.min(64, cols - 8));
+  const inner = Math.min(Math.max(...content.map(width)) + 2, room);
   const left = Math.max(0, Math.floor((cols - inner - 2) / 2));
   const pane = [
     c.yellow('\u250c' + '\u2500'.repeat(inner) + '\u2510'),
@@ -355,6 +391,13 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     process.stdin.resume();
     out.write(ALT_ON + CURSOR_HIDE);
 
+    // Hoisted above the key handler because the derive boxes resolve the picker
+    // from a callback, long after the keypress that opened them has returned.
+    const done = (value) => {
+      cleanup();
+      resolve(value);
+    };
+
     const cleanup = () => {
       out.write(CURSOR_SHOW + ALT_OFF);
       process.stdin.setRawMode(false);
@@ -382,6 +425,72 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     // header says how many are being held back and the key that shows them is
     // in the menu.
     const hiddenUnnamed = () => (showUnnamed ? 0 : ordered.filter((s) => isUnnamed(s) && (showExpired || s.resumable)).length);
+
+    /**
+     * Everything that happens before csm hands the terminal over.
+     *
+     * Deriving ends in an interactive Claude Code session, which has to own the
+     * screen, exactly as k9s gives its screen up to shell into a pod. What does
+     * not have to leave is the question about spending money and the wait that
+     * follows it, and dropping out to a bare terminal for those was the jarring
+     * part: the picker vanished, then asked, then sat silent.
+     */
+    const askDerive = (session) => {
+      const size = session.sizeBytes ? ` · ${humanBytes(session.sizeBytes)}` : '';
+      const w = 56;
+      overlay = {
+        kind: 'confirm',
+        title: 'New session from this one',
+        body: [
+          c.bold(truncate(session.label, w)),
+          c.dim(`${session.messages || 0} messages${size}`),
+          '',
+          ...wrapText('It writes down where things stand and opens a fresh session on that. Doing it with the model replays this whole conversation in one API call, billed to your account.', w),
+          '',
+          ...wrapText(c.cyan('f') + ' builds the handoff from the transcript instead: instant and free, but it records what happened rather than why.', w),
+        ],
+        hint: 'y model · f transcript · any other key cancels',
+        choices: {
+          y: () => runDerive(session, false),
+          f: () => runDerive(session, true),
+        },
+      };
+      draw();
+    };
+
+    const runDerive = (session, fast) => {
+      if (fast || !actions.summarize) return done({ session, action: 'derive', handoff: null });
+      const started = Date.now();
+      const phases = {
+        loading: 'reading the conversation',
+        waiting: 'the model is reading it',
+        writing: 'writing the handoff',
+      };
+      let phase = phases.loading;
+      const paint = () => {
+        overlay = {
+          kind: 'busy',
+          title: 'Writing the handoff',
+          body: [c.bold(truncate(session.label, 56)), '', `${phase}…`],
+          hint: `${Math.round((Date.now() - started) / 1000)}s elapsed`,
+        };
+        draw();
+      };
+      paint();
+      const ticker = setInterval(paint, 1000);
+      actions
+        .summarize(session, (next) => {
+          phase = phases[next] || next;
+          paint();
+        })
+        .then((res) => {
+          clearInterval(ticker);
+          overlay = null;
+          // A failed summary still derives, from the transcript. Stopping here
+          // would throw away a decision the user already made.
+          done({ session, action: 'derive', handoff: res.ok ? res : null, warning: res.ok ? null : res.reason });
+        });
+    };
 
     /** Change the view without losing the session the cursor was on. */
     const keepingCursor = (fn) => {
@@ -444,16 +553,15 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
 
       const head = header(cols);
       const previewHeight = showPreview ? Math.min(11, Math.max(5, Math.floor(rows * 0.4))) : 0;
-      const chrome = head.length + 3 + (showPreview ? previewHeight + 1 : 0);
+      const chrome = head.length + 4 + (showPreview ? previewHeight + 1 : 0);
       const listHeight = Math.max(3, rows - chrome);
       if (cursor < offset) offset = cursor;
       if (cursor >= offset + listHeight) offset = cursor - listHeight + 1;
 
       const rule = c.dim('─'.repeat(Math.min(cols - 1, 100)));
-      const lines = [...head, rule];
-
       const page = filtered.slice(offset, offset + listHeight);
       const tagCol = tagWidth(page, cols);
+      const lines = [...head, rule, renderHeader(cols, tagCol)];
       for (let i = 0; i < listHeight; i++) {
         const s = page[i];
         // The first row of a page always prints its directory, so scrolling
@@ -477,16 +585,12 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
             : c.dim(' NORMAL')) +
           (filtered.length ? c.dim(`  [${cursor + 1}/${filtered.length}]`) : c.red('  no match'))
       );
-      if (overlay?.kind === 'confirm') drawBox(lines, cols, overlay.title, overlay.body, overlay.hint);
+      if (overlay?.kind === 'confirm' || overlay?.kind === 'busy') drawBox(lines, cols, overlay.title, overlay.body, overlay.hint);
       out.write(CLEAR + lines.join('\n'));
     }
 
     function onKey(str, key) {
       if (!key) return;
-      const done = (value) => {
-        cleanup();
-        resolve(value);
-      };
       const enabledFor = (chosen, key) =>
         Boolean(chosen) && menuFor(chosen).find((a) => a.key === key)?.enabled !== false;
 
@@ -522,12 +626,15 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       };
 
       if (key.ctrl && key.name === 'c') return done(null);
+      // A box that is working owns the keyboard until it is done. Letting keys
+      // through would act on a list the running job is about to change.
+      if (overlay?.kind === 'busy') return;
       if (overlay?.kind === 'confirm') {
-        const go = overlay.onYes;
+        const chosen = overlay.choices[(str || '').toLowerCase()];
         overlay = null;
-        // Only `y` confirms. Any other key cancels, so a stray keypress cannot
-        // delete an archive.
-        if (str === 'y' || str === 'Y') go();
+        // Only the listed keys do anything. Everything else cancels, so a stray
+        // keypress can neither delete an archive nor spend money.
+        if (chosen) chosen();
         return draw();
       }
       if (overlay) {
@@ -569,9 +676,14 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       if (key.name === 'f') return act('fork', 'f');
       if (key.name === 'r') return act('remote', 'r');
       if (key.name === 'y') return act('print', 'y');
-      if (key.name === 'n' && !key.ctrl) return act('derive', 'n');
+
 
       flash = '';
+      if (key.name === 'n' && !key.ctrl) {
+        const chosen = filtered[cursor];
+        if (!enabledFor(chosen, 'n')) return draw();
+        return askDerive(chosen);
+      }
       if (key.name === 'd' && !key.ctrl && actions.untag) {
         const chosen = filtered[cursor];
         if (!enabledFor(chosen, 'd')) return draw();
@@ -580,7 +692,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
           title: 'Remove tags?',
           body: [truncate(chosen.label, 60), c.magenta(chosen.tags.map((t) => '#' + t).join(' '))],
           hint: 'y to remove · any other key to keep',
-          onYes: () => inPlace('d', (sess) => actions.untag(sess)),
+          choices: { y: () => inPlace('d', (sess) => actions.untag(sess)) },
         };
       } else if (key.name === 'a' && !key.ctrl && actions.archive) {
         return inPlace('a', (sess) => actions.archive(sess));
