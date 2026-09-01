@@ -24,6 +24,35 @@ Be specific: name real file paths, functions, commands and values rather than de
 
 Output only the document. Do not greet, do not ask questions, do not offer to continue.`;
 
+/**
+ * Shapes that are always a secret, whatever the surrounding text says.
+ *
+ * A transcript is a verbatim record, so anything pasted into a conversation is
+ * in it: npm tokens, API keys, whatever. Copying those into a handoff would put
+ * them in a second file and then feed them to a fresh session's context, so
+ * they are cut out on the way past. This does not clean the transcript itself,
+ * which is Claude Code's own file, and it is a net rather than a guarantee: a
+ * secret that looks like ordinary prose will get through.
+ */
+const SECRETS = [
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g,
+  /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g,
+  /\bsk-[A-Za-z0-9]{32,}\b/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  /\bAIza[0-9A-Za-z_-]{35}\b/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+];
+
+export function redact(text) {
+  let out = String(text);
+  for (const re of SECRETS) out = out.replace(re, '[redacted]');
+  return out;
+}
+
 /** Pull the pieces of a transcript that describe what happened in it. */
 function digest(file) {
   const out = { prompts: [], tools: new Map(), files: new Map(), commands: [], turns: 0 };
@@ -44,8 +73,10 @@ function digest(file) {
     if (d.isSidechain) continue;
     if (d.type === 'user' && !d.isMeta) {
       const text = textOf(d.message).trim();
-      if (text && !text.startsWith('<')) {
-        out.prompts.push(text.replace(/\s+/g, ' ').slice(0, 500));
+      // Claude Code's own interruption marker is not something anybody asked
+      // for, and it turns up often enough to crowd out what they did ask.
+      if (text && !text.startsWith('<') && text !== '[Request interrupted by user]') {
+        out.prompts.push(redact(text.replace(/\s+/g, ' ')).slice(0, 300));
         out.turns++;
       }
     }
@@ -57,7 +88,7 @@ function digest(file) {
       const fp = b.input?.file_path;
       if (fp) out.files.set(fp, (out.files.get(fp) || 0) + 1);
       if (b.name === 'Bash' && b.input?.command) {
-        out.commands.push(String(b.input.command).split('\n')[0].slice(0, 120));
+        out.commands.push(redact(String(b.input.command).split('\n')[0]).slice(0, 120));
       }
     }
   }
@@ -225,6 +256,9 @@ export function handoffPathFor(id) {
 export function writeHandoff(id, text) {
   const dest = handoffPathFor(id);
   fs.mkdirSync(handoffDir(), { recursive: true });
-  fs.writeFileSync(dest, text.endsWith('\n') ? text : text + '\n');
+  // Last gate before anything reaches disk, so the model-written route is
+  // covered too: it is summarising a conversation that may quote a key.
+  const safe = redact(text);
+  fs.writeFileSync(dest, safe.endsWith('\n') ? safe : safe + '\n');
   return dest;
 }
