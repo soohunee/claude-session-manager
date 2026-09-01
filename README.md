@@ -43,21 +43,21 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.2.1              enter  Resume           a      Archive          g      Tree
- 4 shown · 54 expired   f      Resume a copy    /      Filter           u      Go to parent
- sort time              r      Remote control   s      Sort             p      Preview
- filter ref             y      Print cmd        t      Tag filter       ?      Help
-                        n      New from this    .      Show expired     esc    Quit
-                        d      Untag            c      This dir only
+ csm 0.2.1              enter  Resume           a      Archive          c      This dir only
+ 4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
+ sort time              r      Remote control   s      Sort             u      Go to parent
+ filter ref             y      Print cmd        t      Tag filter       p      Preview
+                        n      New from this    .      Show expired     ?      Help
+                        d      Untag            ,      Show unnamed     esc    Quit
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-> 2h ago   144  Billing refactor — split invoice service       ~/work/api                    #billing
-  1d ago   88   Terraform for the new billing queue            ~/work/infra                  #billing
-  4d ago   31   Refactor the auth middleware                   ~/work/api
-  1w ago   459  Refactoring notes and cleanup pass             ~/scratch
+> 2h ago   144  Billing refactor — split invoice service          ~/work/api                     #billing
+  1d ago   88   Terraform for the new billing queue               ~/work/infra                   #billing
+  4d ago   31   Refactor the auth middleware                      ~/work/api
+  1w ago   459  Refactoring notes and cleanup pass                ~/scratch
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-08-31 13:11 · 144 messages · main · archived
+2026-09-01 07:15 · 144 messages · main · archived
 ~/work/api
 0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
@@ -79,6 +79,10 @@ disappearing, so there is nothing to look up.
 - **Archives that outlive cleanup.** Tagged sessions are copied out of Claude
   Code's reach and restored in place when you resume them, and refreshed each
   time the session ends so the copy never falls behind.
+- **Conversations, not leftovers.** Running `/plugins` or `/login` leaves a
+  session behind too. Claude Code writes a title into a transcript once there is
+  an actual conversation in it, so csm lists the ones it named and keeps the
+  rest a keypress away. On this machine that is 13 rows instead of 29.
 - **Cross-directory search.** One picker over every session on the machine, not
   just the current project.
 - **Full-text search.** `csm search "rate limit"` looks inside the conversations
@@ -190,7 +194,8 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `--tagged` | Only sessions carrying at least one tag |
 | `-d, --dir [path]` | Only sessions from this directory (default: cwd) |
 | `-n, --limit <n>` | Cap the number of sessions shown |
-| `-a, --all` | Include expired sessions with no transcript left |
+| `-a, --all` | Everything csm knows of, expired and unnamed included |
+| `--unnamed` | Include sessions Claude Code never named (slash commands) |
 | `-s, --sort <time\|title\|dir>` | Order sessions (default: `time`) |
 | `-p, --preview` | Open the picker with the preview panel already on |
 | `--remote` | Resume with Remote Control, to continue on mobile |
@@ -226,6 +231,7 @@ dim, and <kbd>?</kbd> explains every one of them in a sentence.
 | <kbd>s</kbd> | Cycle the sort: time, title, directory |
 | <kbd>t</kbd> | Cycle the tag filter: off, any tag, then each tag in turn |
 | <kbd>.</kbd> | Show expired sessions |
+| <kbd>,</kbd> | Show unnamed sessions — what running a slash command left behind |
 | <kbd>c</kbd> | Narrow to the selected session's directory |
 | <kbd>g</kbd> | Nest derived sessions under the ones they came from |
 | <kbd>u</kbd> | Go to the parent of the selected session |
@@ -302,6 +308,26 @@ A derived session whose parent is filtered out of the view is listed at the top
 level rather than hidden, and `csm untag` and `csm prune` leave the archive of
 any session a tree hangs off alone — dropping it would strand the branches under
 a root that no longer exists.
+
+### What the list leaves out
+
+Two kinds of session are hidden until you ask for them, and the header says how
+many of each.
+
+Sessions whose transcript Claude Code has already deleted are listed only with
+<kbd>.</kbd> or `-a`; nothing is left to restore, so they are there to show you
+what was lost rather than to resume.
+
+Sessions Claude Code never named are hidden by <kbd>,</kbd>. It writes an
+`ai-title` once a session has a conversation in it, so the unnamed ones are what
+`/plugins`, `/login` or a stray keystroke left behind. This is Claude Code's own
+judgement rather than a threshold csm invented, and it separates cleanly: across
+94 sessions here, the named ones had a median of 198 messages and the unnamed a
+median of 2, with no named session under 7.
+
+Two things are never treated as unnamed: a session from the last hour, which has
+not been titled *yet* rather than never, and one csm derived from another, which
+carries csm's own label and a recorded parent.
 
 ## How it works
 

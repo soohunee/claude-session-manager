@@ -18,7 +18,7 @@ delete process.env.NO_COLOR;
 
 const { width, truncate, pad, relTime, c } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
-const { parseTranscript, scanSessions, sortSessions } = await import('../src/scan.js');
+const { parseTranscript, scanSessions, sortSessions, isUnnamed } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
 const { pick, layoutMenu, compactMenu, menuFor, shortPath, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
@@ -636,8 +636,8 @@ async function drivePicker(sessions, keys, { actions = {}, cols = 100, rows = 24
   }
 }
 
-const LIVE = { id: 'live0000-0000', label: 'Live one', cwd: CWD, resumable: true, file: '/x', tags: ['keep'], updatedAt: '2026-01-02T00:00:00.000Z', messages: 3 };
-const EXPIRED = { id: 'gone0000-0000', label: 'Expired one', cwd: CWD, resumable: false, file: null, tags: [], updatedAt: '2026-01-01T00:00:00.000Z', messages: 1 };
+const LIVE = { id: 'live0000-0000', label: 'Live one', title: 'Live one', cwd: CWD, resumable: true, file: '/x', tags: ['keep'], updatedAt: '2026-01-02T00:00:00.000Z', messages: 3 };
+const EXPIRED = { id: 'gone0000-0000', label: 'Expired one', title: 'Expired one', cwd: CWD, resumable: false, file: null, tags: [], updatedAt: '2026-01-01T00:00:00.000Z', messages: 1 };
 
 test('the picker resumes the highlighted session', async () => {
   const { result } = await drivePicker([LIVE, EXPIRED], [{ name: 'return' }]);
@@ -796,4 +796,50 @@ test('the picker prints a directory once per run of rows that share it', async (
   assert.match(rows[0], /same/, 'the first row of a run carries the directory');
   assert.equal(/same|other/.test(rows[1]), false, 'the repeat is left blank');
   assert.match(rows[2], /other/, 'a new directory starts a new run');
+});
+
+test('a session Claude Code never named counts as unnamed, once it has had time to be', () => {
+  const old = new Date(Date.now() - 5 * 3600 * 1000).toISOString();
+  const now = new Date().toISOString();
+  assert.equal(isUnnamed({ title: null, updatedAt: old }), true);
+  assert.equal(isUnnamed({ title: 'Billing refactor', updatedAt: old }), false, 'a title is the whole signal');
+  // The grace period is the point: hiding the session someone just closed,
+  // because Claude Code has not titled it yet, would be the worst possible miss.
+  assert.equal(isUnnamed({ title: null, updatedAt: now }), false);
+  assert.equal(isUnnamed(undefined), false);
+  assert.equal(isUnnamed({ title: null, updatedAt: null }), true, 'no timestamp is not recent');
+  // A session csm derived is one someone deliberately started; Claude Code will
+  // not have titled it yet, but it is the opposite of a leftover.
+  assert.equal(isUnnamed({ title: null, parent: 'root', updatedAt: old }), false);
+});
+
+test('listings hide unnamed sessions unless asked', () => {
+  writeTranscript('named-1', fixtureLines('Real work', 'do the thing'));
+  writeTranscript('unnamed-1', [
+    { type: 'user', cwd: CWD, timestamp: '2026-01-01T00:00:00.000Z', message: { role: 'user', content: '/plugins' } },
+  ]);
+  const plain = selectSessions({ ...parseArgs([]).opts, refresh: true }, null).map((x) => x.id);
+  assert.ok(plain.includes('named-1'));
+  assert.equal(plain.includes('unnamed-1'), false);
+
+  for (const argv of [['--unnamed'], ['-a']]) {
+    const shown = selectSessions(parseArgs(argv).opts, null).map((x) => x.id);
+    assert.ok(shown.includes('unnamed-1'), `${argv} should bring it back`);
+  }
+});
+
+test('the picker hides unnamed sessions, says how many, and can show them', async () => {
+  const old = new Date(Date.now() - 5 * 3600 * 1000).toISOString();
+  const named = { ...LIVE, id: 'n1', label: 'Real work', title: 'Real work', tags: [], updatedAt: old };
+  const bare = { ...LIVE, id: 'u1', label: '/plugins', title: null, tags: [], updatedAt: old };
+
+  const hidden = await drivePicker([named, bare], []);
+  assert.match(hidden.screen, /Real work/);
+  assert.equal(hidden.screen.includes('/plugins'), false);
+  // A filter that silently drops rows is indistinguishable from a bug.
+  assert.match(hidden.screen, /1 unnamed hidden/);
+
+  const shown = await drivePicker([named, bare], [{ str: ',' }]);
+  assert.match(shown.screen, /\/plugins/);
+  assert.equal(shown.screen.includes('unnamed hidden'), false);
 });

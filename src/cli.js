@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { scanSessions, sortSessions, SORT_MODES } from './scan.js';
+import { scanSessions, sortSessions, isUnnamed, SORT_MODES } from './scan.js';
 import { loadTags, addTags, removeTags, normalizeTag, ensureHome, readJson } from './store.js';
 import { archiveSession, restoreSession, removeArchive, archiveStats, humanBytes, isArchived } from './archive.js';
 import {
@@ -54,7 +54,8 @@ ${c.bold('OPTIONS')}
       --tagged                Only sessions carrying at least one tag (^a toggles)
   -d, --dir [path]            Only sessions from this directory (default: cwd)
   -n, --limit <n>             Cap the number of sessions shown
-  -a, --all                   Include expired sessions with no transcript left
+  -a, --all                   Everything csm knows of, expired and unnamed included
+      --unnamed               Include sessions Claude Code never named (slash commands)
   -s, --sort <time|title|dir> Order sessions (default: time)
   -p, --preview               Open the picker with the preview panel already on
       --remote                Resume with Remote Control, to continue on mobile
@@ -94,7 +95,7 @@ Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
 
 export function parseArgs(argv) {
-  const opts = { tags: [], dir: null, limit: null, all: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, yes: false, note: null, model: null };
+  const opts = { tags: [], dir: null, limit: null, all: false, unnamed: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, yes: false, note: null, model: null };
   const rest = [];
   const passthrough = [];
   let i = 0;
@@ -117,7 +118,7 @@ export function parseArgs(argv) {
       const next = argv[i + 1];
       opts.dir = next && !next.startsWith('-') ? path.resolve(argv[++i]) : process.cwd();
     } else if (a === '-n' || a === '--limit') opts.limit = parseInt(argv[++i], 10) || null;
-    else if (a === '-a' || a === '--all') opts.all = true;
+    else if (a === '-a' || a === '--all') opts.all = opts.unnamed = true;
     else if (a === '--json') opts.json = true;
     else if (a === '--session') opts.session = argv[++i];
     else if (a === '--no-archive') opts.archive = false;
@@ -127,6 +128,7 @@ export function parseArgs(argv) {
     else if (a === '--model') opts.model = argv[++i] || null;
     else if (a === '--refresh') opts.refresh = true;
     else if (a === '--tagged') opts.tagged = true;
+    else if (a === '--unnamed') opts.unnamed = true;
     else if (a === '-s' || a === '--sort') {
       const mode = argv[++i];
       if (!SORT_MODES.includes(mode)) {
@@ -148,6 +150,7 @@ export function parseArgs(argv) {
 export function selectSessions(opts, query) {
   let sessions = scanSessions({ refresh: opts.refresh });
   if (!opts.all) sessions = sessions.filter((s) => s.resumable);
+  if (!opts.unnamed) sessions = sessions.filter((s) => !isUnnamed(s));
   if (opts.tagged) sessions = sessions.filter((s) => s.tags.length > 0);
   if (opts.tags.length) sessions = sessions.filter((s) => opts.tags.every((t) => s.tags.includes(t)));
   if (opts.dir) sessions = sessions.filter((s) => s.cwd === opts.dir);
@@ -692,7 +695,7 @@ async function cmdPick(opts, rest, passthrough) {
   // Expired, tagged and directory are toggles inside the picker now, so the
   // pool it gets must still contain everything they can bring back. Applying
   // them here would leave a key that can hide but never restore.
-  const pool = selectSessions({ ...opts, all: true, tagged: false, dir: null }, null);
+  const pool = selectSessions({ ...opts, all: true, unnamed: true, tagged: false, dir: null }, null);
   const sessions = pool;
   // Count against everything on disk, not the filtered view, so the header
   // never claims there are no expired sessions when it simply hid them.
@@ -712,9 +715,7 @@ async function cmdPick(opts, rest, passthrough) {
   if (opts.tags.length) scope.push(opts.tags.map((t) => '#' + t).join(' '));
   if (opts.dir) scope.push(homeShort(opts.dir));
   if (opts.all) scope.push('including expired');
-  const subtitle =
-    `${plural(sessions.length, 'session')} shown` +
-    (expired && !opts.all ? ` · ${expired} expired, transcript gone (-a to list)` : '');
+  const subtitle = expired && !opts.all ? `${expired} expired` : '';
   // The picker owns no storage of its own: it is handed the operations it may
   // perform, so it stays a renderer and the rules about archives live in one
   // place. Each returns the line to flash in the footer.
@@ -743,6 +744,7 @@ async function cmdPick(opts, rest, passthrough) {
     preview: opts.preview,
     sort: opts.sort,
     expired: opts.all,
+    unnamed: opts.unnamed,
     dir: opts.dir,
     tag: opts.tags.length === 1 ? opts.tags[0] : opts.tagged ? '*' : null,
   });

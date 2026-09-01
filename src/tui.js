@@ -1,7 +1,7 @@
 import readline from 'node:readline';
 import { width, truncate, pad, relTime, c } from './format.js';
 import { tailMessages } from './preview.js';
-import { sortSessions, SORT_MODES } from './scan.js';
+import { sortSessions, isUnnamed, SORT_MODES } from './scan.js';
 import { buildTree } from './links.js';
 
 const ESC = '\x1b';
@@ -80,6 +80,7 @@ export const ACTIONS = [
   { key: 's', label: 'Sort', help: 'Cycle the order: time, title, directory' },
   { key: 't', label: 'Tag filter', help: 'Cycle: everything, anything tagged, then one tag at a time' },
   { key: '.', label: 'Show expired', help: 'Include sessions Claude Code has already deleted the transcript of' },
+  { key: ',', label: 'Show unnamed', help: 'Include what running a slash command left behind, which Claude Code never named' },
   { key: 'c', label: 'This dir only', needs: 'cwd', help: "Narrow to the selected session's directory, and back again" },
   { key: 'g', label: 'Tree', help: 'Nest sessions under the ones they were derived from' },
   { key: 'u', label: 'Go to parent', needs: 'parent', help: 'Move to the session this one was derived from' },
@@ -319,7 +320,7 @@ function helpOverlay(cols, rows) {
  * line that truncated on a narrow terminal, so the features a new user most
  * needed pointing out were the first to disappear.
  */
-export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, dir = null, tag: taggedOnly = null, tree = false, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
+export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, unnamed = false, dir = null, tag: taggedOnly = null, tree = false, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -333,6 +334,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     let tagAt = Math.max(0, tagCycle.indexOf(taggedOnly));
     let showExpired = expired;
     let showTree = tree;
+    let showUnnamed = unnamed;
     // Narrowing to a directory is a toggle rather than a flag, so it has to
     // remember which directory it was narrowed to.
     let onlyDir = dir;
@@ -364,6 +366,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     const applyFilter = () => {
       let list = ordered;
       if (!showExpired) list = list.filter((s) => s.resumable);
+      if (!showUnnamed) list = list.filter((s) => !isUnnamed(s));
       const tag = tagCycle[tagAt];
       if (tag === '*') list = list.filter((s) => (s.tags || []).length > 0);
       else if (tag) list = list.filter((s) => (s.tags || []).includes(tag));
@@ -374,6 +377,11 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       filtered = showTree ? buildTree(list) : list;
       if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
     };
+
+    // A filter that silently drops rows is indistinguishable from a bug, so the
+    // header says how many are being held back and the key that shows them is
+    // in the menu.
+    const hiddenUnnamed = () => (showUnnamed ? 0 : ordered.filter((s) => isUnnamed(s) && (showExpired || s.resumable)).length);
 
     /** Change the view without losing the session the cursor was on. */
     const keepingCursor = (fn) => {
@@ -388,7 +396,9 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     function header(cols) {
       const left = [
         c.bold('csm') + (version ? c.dim(' ' + version) : '') + (scope ? '  ' + c.magenta(scope) : ''),
-        c.dim(subtitle || `${filtered.length} shown`),
+        c.dim(`${filtered.length} shown`) +
+          (hiddenUnnamed() ? c.dim(` · ${hiddenUnnamed()} unnamed hidden`) : '') +
+          (subtitle ? c.dim(' · ' + subtitle) : ''),
         c.dim(`sort ${sort}`) +
           (tagCycle[tagAt] === '*' ? ' ' + c.magenta('tagged') : tagCycle[tagAt] ? ' ' + c.magenta('#' + tagCycle[tagAt]) : '') +
           (showExpired ? ' ' + c.magenta('expired') : '') +
@@ -400,7 +410,10 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
             ? c.dim('filter ') + query
             : c.dim('press / to filter'),
       ];
-      const leftWidth = Math.max(...left.map(width)) + 3;
+      // The state block is capped so it cannot crowd the menu out. If something
+      // has to be cut it is this: the counts are a convenience, and the menu is
+      // the only thing telling a new user what the tool can do.
+      const leftWidth = Math.min(Math.max(...left.map(width)) + 3, Math.floor(cols * 0.4));
       const entries = menuFor(filtered[cursor]);
       const menu = layoutMenu(entries, cols - leftWidth - 2);
       // The grid may not fit beside the state block on a narrow or short
@@ -414,7 +427,8 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       for (let i = 0; i < rows; i++) {
         const l = left[i] ?? '';
         const m = grid ? menu[i] ?? '' : '';
-        lines.push(' ' + l + (m ? ' '.repeat(Math.max(1, leftWidth - width(l))) + m : ''));
+        const cell = truncate(l, leftWidth - 1);
+        lines.push(' ' + cell + (m ? ' '.repeat(Math.max(1, leftWidth - width(cell))) + m : ''));
       }
       if (!grid) lines.push(' ' + compactMenu(entries, cols - 3));
       return lines;
@@ -575,6 +589,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       else if (key.name === 'p' && !key.ctrl) showPreview = !showPreview;
       else if (key.name === 't') keepingCursor(() => (tagAt = (tagAt + 1) % tagCycle.length));
       else if (str === '.') keepingCursor(() => (showExpired = !showExpired));
+      else if (str === ',') keepingCursor(() => (showUnnamed = !showUnnamed));
       else if (key.name === 'g' && !key.shift && !key.ctrl) keepingCursor(() => (showTree = !showTree));
       else if (key.name === 'u' && !key.ctrl) {
         const parent = filtered[cursor]?.parent;
