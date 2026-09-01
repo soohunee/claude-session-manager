@@ -43,27 +43,28 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.2.1              enter  Resume           a      Archive          c      This dir only
+ csm 0.2.2              enter  Resume           a      Archive          c      This dir only
  4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
  sort time              r      Remote control   s      Sort             u      Go to parent
  filter ref             y      Print cmd        t      Tag filter       p      Preview
                         n      New from this    .      Show expired     ?      Help
                         d      Untag            ,      Show unnamed     esc    Quit
 ────────────────────────────────────────────────────────────────────────────────────────────────────
+  when     msgs title                                             directory                      tags
 > 2h ago   144  Billing refactor — split invoice service          ~/work/api                     #billing
   1d ago   88   Terraform for the new billing queue               ~/work/infra                   #billing
   4d ago   31   Refactor the auth middleware                      ~/work/api
   1w ago   459  Refactoring notes and cleanup pass                ~/scratch
-
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-09-01 07:15 · 144 messages · main · archived
+2026-09-01 07:24 · 144 messages · main · archived
 ~/work/api
 0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
 › extract the token check into middleware
 ‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
 ‹ The invoice service no longer imports the auth module directly.
+
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
  NORMAL  [1/4]
@@ -279,7 +280,9 @@ csm derive --note "Start with the failing test."
 
 Writing the handoff replays the whole parent conversation through the model in
 one API call, billed to your Claude account, so `derive` says what it is about
-to spend on and asks first. `--yes` skips the question. While it runs it reports
+to spend on and asks first. From the picker, <kbd>n</kbd> asks in a box over the
+list and waits there too — only the handover to Claude Code itself takes the
+screen, the same way k9s keeps its own UI until you shell into something. `--yes` skips the question. While it runs it reports
 which phase it is in — reading the conversation, the model reading it, writing
 the handoff — because loading a multi-megabyte transcript happens before the
 model is reached, and a silent run looks the same whether it is working or hung.

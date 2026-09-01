@@ -92,6 +92,14 @@ export const c = {
   inverse: wrap(7),
 };
 
+/** A byte count at a glance. Lives here rather than with the archive because it
+ * is a formatter, and the picker needs it without reaching into storage. */
+export function humanBytes(n) {
+  if (n < 1024) return n + 'B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + 'KB';
+  return (n / 1024 / 1024).toFixed(1) + 'MB';
+}
+
 export function plural(n, one, many) {
   return n + ' ' + (n === 1 ? one : many || one + 's');
 }
