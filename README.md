@@ -43,7 +43,7 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.2.2              enter  Resume           a      Archive          c      This dir only
+ csm 0.2.3              enter  Resume           a      Archive          c      This dir only
  4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
  sort time              r      Remote control   s      Sort             u      Go to parent
  filter ref             y      Print cmd        t      Tag filter       p      Preview
@@ -57,7 +57,7 @@ lets you search what was actually said in them.
   1w ago   459  Refactoring notes and cleanup pass                ~/scratch
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-09-01 07:24 · 144 messages · main · archived
+2026-09-01 07:31 · 144 messages · main · archived
 ~/work/api
 0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
@@ -242,6 +242,12 @@ dim, and <kbd>?</kbd> explains every one of them in a sentence.
 | <kbd>G</kbd> / <kbd>Home</kbd> <kbd>End</kbd> | Jump to the end or the start |
 | <kbd>?</kbd> | Show every key |
 | <kbd>Esc</kbd> <kbd>q</kbd> | Quit |
+
+Anything that removes something or spends money asks in a dialog over the list,
+with the session still in view. Pick a button with <kbd>←</kbd> <kbd>→</kbd> and
+run it with <kbd>Enter</kbd>; <kbd>Esc</kbd> backs out. The safe button starts
+selected, so the reflex to hit <kbd>Enter</kbd> is never the one that deletes an
+archive or starts a billed call.
 
 Letters act on the session under the cursor, which is why filtering lives behind
 <kbd>/</kbd>. An unrecognised key does nothing rather than falling through to the

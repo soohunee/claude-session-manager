@@ -657,19 +657,25 @@ test('the picker refuses an action its menu has dimmed', async () => {
   assert.equal(result, null, 'escape still quits');
 });
 
-test('untagging asks first, and only y goes through', async () => {
+test('untagging asks first, and enter alone does not go through', async () => {
   let called = 0;
   const actions = { untag: () => (called++, 'untagged'), reload: () => [LIVE] };
 
   const asked = await drivePicker([LIVE], [{ name: 'd' }], { actions });
-  assert.match(asked.screen, /Remove tags\?/);
-  assert.match(asked.screen, /y to remove/);
+  assert.match(asked.screen, /<Remove tags>/);
+  assert.match(asked.screen, /Cancel/);
+  assert.match(asked.screen, /Remove/);
   assert.equal(called, 0, 'nothing happens until the question is answered');
 
-  await drivePicker([LIVE], [{ name: 'd' }, { str: 'n', name: 'n' }], { actions });
-  assert.equal(called, 0, 'any key other than y cancels');
+  // Cancel is focused first, the way k9s does it for anything destructive, so
+  // the reflex to hit enter is the one that keeps the archive.
+  await drivePicker([LIVE], [{ name: 'd' }, { name: 'return' }], { actions });
+  assert.equal(called, 0, 'enter on the default button cancels');
 
-  const done = await drivePicker([LIVE], [{ name: 'd' }, { str: 'y', name: 'y' }], { actions });
+  await drivePicker([LIVE], [{ name: 'd' }, { name: 'escape' }], { actions });
+  assert.equal(called, 0, 'escape cancels');
+
+  const done = await drivePicker([LIVE], [{ name: 'd' }, { name: 'right' }, { name: 'return' }], { actions });
   assert.equal(called, 1);
   assert.equal(done.result, 'still-open', 'the picker stays open after acting');
   assert.match(done.screen, /untagged/, 'and says what it did');
@@ -860,28 +866,35 @@ test('deriving asks inside the picker and offers the free route', async () => {
   const actions = { summarize: () => (summarised++, Promise.resolve({ ok: true, text: 'done', cost: 0.1 })) };
 
   const asked = await drivePicker([LIVE], [{ name: 'n' }], { actions });
-  assert.match(asked.screen, /New session from this one/);
+  assert.match(asked.screen, /<New session from this>/);
   // The box wraps, so assert on phrases a line break cannot split.
-  assert.match(asked.screen, /one API call/, 'it must say what it is about to do');
-  assert.match(asked.screen, /billed to your/, 'it must say it costs money');
-  assert.match(asked.screen, /y model . f transcript/);
+  assert.match(asked.screen, /one billed API call/, 'it must say it costs money');
+  for (const button of ['Cancel', 'From transcript', 'Use the model']) {
+    assert.match(asked.screen, new RegExp(button));
+  }
   assert.equal(summarised, 0, 'nothing runs until the question is answered');
 
-  // Any other key cancels, so `n` cannot spend money by itself.
-  const cancelled = await drivePicker([LIVE], [{ name: 'n' }, { str: 'x', name: 'x' }], { actions });
+  // Cancel is focused, so `n` followed by the reflex enter spends nothing.
+  const reflex = await drivePicker([LIVE], [{ name: 'n' }, { name: 'return' }], { actions });
   assert.equal(summarised, 0);
-  assert.equal(cancelled.result, 'still-open');
+  assert.equal(reflex.result, 'still-open');
 
-  // `f` skips the model entirely and leaves with no handoff to carry.
-  const fast = await drivePicker([LIVE], [{ name: 'n' }, { str: 'f', name: 'f' }], { actions });
-  assert.equal(summarised, 0, 'the fast route never reaches the model');
+  // One right is the transcript route: it leaves with no handoff to carry.
+  const fast = await drivePicker([LIVE], [{ name: 'n' }, { name: 'right' }, { name: 'return' }], { actions });
+  assert.equal(summarised, 0, 'the transcript route never reaches the model');
   assert.equal(fast.result.action, 'derive');
   assert.equal(fast.result.handoff, null);
+
+  // Two rights is the model, and the handoff comes back with it.
+  const slow = await drivePicker([LIVE], [{ name: 'n' }, { name: 'right' }, { name: 'right' }, { name: 'return' }], { actions });
+  assert.equal(summarised, 1);
+  assert.equal(slow.result.handoff.text, 'done');
 });
 
 test('a failed summary still derives, from the transcript', async () => {
   const actions = { summarize: () => Promise.resolve({ ok: false, reason: 'context too long' }) };
-  const { result } = await drivePicker([LIVE], [{ name: 'n' }, { str: 'y', name: 'y' }], { actions });
+  const keys = [{ name: 'n' }, { name: 'right' }, { name: 'right' }, { name: 'return' }];
+  const { result } = await drivePicker([LIVE], keys, { actions });
   // Stopping here would throw away a decision the user has already made.
   assert.equal(result.action, 'derive');
   assert.equal(result.handoff, null);
