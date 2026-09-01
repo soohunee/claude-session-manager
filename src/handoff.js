@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { textOf } from './scan.js';
 import { handoffDir, projectsDir, encodeProjectPath } from './paths.js';
 
@@ -123,32 +123,66 @@ export function extractHandoff(session) {
  * without the summary request becoming part of the conversation. The fork is a
  * throwaway, so its transcript is deleted once the answer is out.
  */
-export function summarizeHandoff(session, { model = null, timeoutMs = 10 * 60 * 1000 } = {}) {
+export function summarizeHandoff(session, { model = null, timeoutMs = 20 * 60 * 1000, onPhase = () => {} } = {}) {
   return new Promise((resolve) => {
-    const args = ['--resume', session.id, '--fork-session', '-p', '--output-format', 'json'];
+    const args = ['--resume', session.id, '--fork-session', '-p', '--output-format', 'stream-json', '--verbose'];
     if (model) args.push('--model', model);
     args.push(SUMMARY_PROMPT);
-    execFile(
-      'claude',
-      args,
-      { cwd: session.cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
-      (err, stdout) => {
-        let payload = null;
+
+    const child = spawn('claude', args, { cwd: session.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    let payload = null;
+    let buffer = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish({ ok: false, reason: `gave up after ${Math.round(timeoutMs / 60000)} minutes` });
+    }, timeoutMs);
+
+    // The stream is what makes the wait legible. Loading a multi-megabyte
+    // transcript happens before the model is even reached, so without this the
+    // whole call looks identical whether it is working or hung.
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      let nl;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        let d;
         try {
-          payload = JSON.parse(stdout);
+          d = JSON.parse(line);
         } catch {
-          /* fall through to the failure path below */
+          continue;
         }
-        // The fork exists whether or not the call succeeded, so clean it up
-        // before deciding what to report.
-        if (payload?.session_id) discardFork(session.cwd, payload.session_id);
-        if (err && !payload) return resolve({ ok: false, reason: err.code === 'ENOENT' ? 'no-claude' : String(err.message) });
-        if (!payload || payload.is_error || typeof payload.result !== 'string' || !payload.result.trim()) {
-          return resolve({ ok: false, reason: payload?.result || 'the summary came back empty' });
-        }
-        resolve({ ok: true, text: payload.result.trim(), cost: payload.total_cost_usd ?? null });
+        if (d.type === 'system' && d.subtype === 'init') onPhase('waiting');
+        else if (d.type === 'assistant') onPhase('writing');
+        else if (d.type === 'result') payload = d;
       }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+
+    child.on('error', (err) =>
+      finish({ ok: false, reason: err.code === 'ENOENT' ? 'claude is not on your PATH' : String(err.message) })
     );
+    child.on('close', () => {
+      // The fork exists whether or not the call succeeded, so clean it up
+      // before deciding what to report.
+      if (payload?.session_id) discardFork(session.cwd, payload.session_id);
+      if (!payload || payload.is_error || typeof payload.result !== 'string' || !payload.result.trim()) {
+        const why = payload?.result || stderr.trim().split('\n').pop() || 'the summary came back empty';
+        return finish({ ok: false, reason: why.slice(0, 200) });
+      }
+      finish({ ok: true, text: payload.result.trim(), cost: payload.total_cost_usd ?? null });
+    });
   });
 }
 

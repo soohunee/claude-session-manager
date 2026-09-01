@@ -95,3 +95,64 @@ export const c = {
 export function plural(n, one, many) {
   return n + ' ' + (n === 1 ? one : many || one + 's');
 }
+
+const FRAMES = ['\u280b', '\u2819', '\u2839', '\u2838', '\u283c', '\u2834', '\u2826', '\u2827', '\u2807', '\u280f'];
+
+/**
+ * A one-line status that updates in place while something slow runs.
+ *
+ * Written to stderr so it never lands in a piped result, and reduced to a
+ * single printed line when the output is not a terminal, since a carriage
+ * return into a log file just produces noise.
+ */
+export function spinner(label) {
+  const tty = Boolean(process.stderr.isTTY) && !process.env.NO_COLOR;
+  const started = Date.now();
+  let text = label;
+  let i = 0;
+  const secs = () => Math.round((Date.now() - started) / 1000) + 's';
+  if (!tty) {
+    // No cursor to move, so each phase gets its own line. A carriage return
+    // into a log file just produces noise, but silence would leave a piped run
+    // looking hung for exactly as long as the interactive one does not.
+    process.stderr.write(`  ${label}\n`);
+    return {
+      update: (next) => {
+        if (next === text) return;
+        text = next;
+        process.stderr.write(`  ${next} (${secs()})\n`);
+      },
+      stop: () => {},
+      elapsed: secs,
+    };
+  }
+  const paint = () => {
+    process.stderr.write(`\r\u001b[2K  ${FRAMES[i++ % FRAMES.length]} ${text} ${ESC}[2m${secs()}${ESC}[0m`);
+  };
+  paint();
+  const timer = setInterval(paint, 80);
+  return {
+    update: (next) => {
+      text = next;
+      paint();
+    },
+    stop: () => {
+      clearInterval(timer);
+      process.stderr.write('\r\u001b[2K');
+    },
+    elapsed: secs,
+  };
+}
+
+/** Ask a yes/no question on the terminal. Returns false when there is no terminal. */
+export async function confirm(question) {
+  if (!process.stdin.isTTY) return false;
+  const readline = await import('node:readline/promises');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}

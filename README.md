@@ -43,21 +43,21 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.2.0              enter  Resume          a      Archive         g      Tree
- 4 shown · 54 expired   f      Fork            /      Filter          u      Go to parent
- sort time              r      Remote          s      Sort            p      Preview
- filter ref             y      Print cmd       t      Tag filter      ?      Help
-                        n      New from this   .      Show expired    esc    Quit
-                        d      Untag           c      This dir only
-───────────────────────────────────────────────────────────────────────────────────────────────────
-> 2h ago   144  Billing refactor — split invoice service    ~/work/api                   #billing
-  1d ago   88   Terraform for the new billing queue         ~/work/infra                 #billing
-  4d ago   31   Refactor the auth middleware                ~/work/api
-  1w ago   459  Refactoring notes and cleanup pass          ~/scratch
+ csm 0.2.1              enter  Resume           a      Archive          c      This dir only
+ 4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
+ sort time              r      Remote control   s      Sort             u      Go to parent
+ filter ref             y      Print cmd        t      Tag filter       p      Preview
+                        n      New from this    .      Show expired     ?      Help
+                        d      Untag            ,      Show unnamed     esc    Quit
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> 2h ago   144  Billing refactor — split invoice service          ~/work/api                     #billing
+  1d ago   88   Terraform for the new billing queue               ~/work/infra                   #billing
+  4d ago   31   Refactor the auth middleware                      ~/work/api
+  1w ago   459  Refactoring notes and cleanup pass                ~/scratch
 
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-08-31 08:54 · 144 messages · main · archived
+2026-09-01 07:15 · 144 messages · main · archived
 ~/work/api
 0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
@@ -65,7 +65,7 @@ Billing refactor — split invoice service
 ‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
 ‹ The invoice service no longer imports the auth module directly.
 
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────
  NORMAL  [1/4]
 ```
 
@@ -79,6 +79,10 @@ disappearing, so there is nothing to look up.
 - **Archives that outlive cleanup.** Tagged sessions are copied out of Claude
   Code's reach and restored in place when you resume them, and refreshed each
   time the session ends so the copy never falls behind.
+- **Conversations, not leftovers.** Running `/plugins` or `/login` leaves a
+  session behind too. Claude Code writes a title into a transcript once there is
+  an actual conversation in it, so csm lists the ones it named and keeps the
+  rest a keypress away. On this machine that is 13 rows instead of 29.
 - **Cross-directory search.** One picker over every session on the machine, not
   just the current project.
 - **Full-text search.** `csm search "rate limit"` looks inside the conversations
@@ -115,6 +119,23 @@ disappearing, so there is nothing to look up.
 npm install -g claude-sessions-cli
 csm init
 ```
+
+If you cannot reach the npm registry, every
+[release](https://github.com/soohunee/claude-session-manager/releases) carries
+two downloads. `claude-sessions-cli-<version>.tgz` installs with
+`npm i -g ./claude-sessions-cli-<version>.tgz`, and `csm-<version>.tar.gz` needs
+no npm at all:
+
+```bash
+mkdir -p ~/.local/opt ~/.local/bin
+tar -xzf csm-<version>.tar.gz -C ~/.local/opt
+ln -sf ~/.local/opt/csm-<version>/bin/csm.js ~/.local/bin/csm
+csm init
+```
+
+There are no dependencies and no build step, so the files are the whole install.
+Leave the extracted directory where it is: `csm init` records its absolute path
+in the hooks, and re-run `csm init` after upgrading this way.
 
 `csm init` installs the `/persist` slash command and three hooks. `SessionStart`
 and `UserPromptSubmit` record which session is live in which directory, so
@@ -173,7 +194,8 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `--tagged` | Only sessions carrying at least one tag |
 | `-d, --dir [path]` | Only sessions from this directory (default: cwd) |
 | `-n, --limit <n>` | Cap the number of sessions shown |
-| `-a, --all` | Include expired sessions with no transcript left |
+| `-a, --all` | Everything csm knows of, expired and unnamed included |
+| `--unnamed` | Include sessions Claude Code never named (slash commands) |
 | `-s, --sort <time\|title\|dir>` | Order sessions (default: `time`) |
 | `-p, --preview` | Open the picker with the preview panel already on |
 | `--remote` | Resume with Remote Control, to continue on mobile |
@@ -182,6 +204,7 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `--json` | Machine-readable output |
 | `--session <id>` | Target this session id, matched on an id prefix |
 | `--fast` | With `derive`: build the handoff without asking a model |
+| `-y, --yes` | With `derive`: do not ask before spending on the model |
 | `--note <text>` | With `derive`: extra instructions for the new session |
 | `--model <name>` | Model to write the handoff with (default: your usual one) |
 | `--no-archive` | With `tag`: record the tag but do not archive |
@@ -193,13 +216,13 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 
 The picker lists these on screen, so this table is a reference rather than
 something to learn. Keys that do not apply to the highlighted session are shown
-dim, and <kbd>?</kbd> opens the full set at any time.
+dim, and <kbd>?</kbd> explains every one of them in a sentence.
 
 | Key | Action |
 | --- | --- |
 | <kbd>Enter</kbd> | Resume the selected session |
-| <kbd>f</kbd> | Resume it as a fork, leaving the original untouched |
-| <kbd>r</kbd> | Resume it with Remote Control |
+| <kbd>f</kbd> | Resume a copy: branch under a new id, leaving this one as it is |
+| <kbd>r</kbd> | Resume with Remote Control, to carry on from your phone |
 | <kbd>y</kbd> | Print the resume command and exit |
 | <kbd>n</kbd> | Derive a fresh session carrying a handoff from this one |
 | <kbd>d</kbd> | Remove its tags, and its archive with them (asks first) |
@@ -208,6 +231,7 @@ dim, and <kbd>?</kbd> opens the full set at any time.
 | <kbd>s</kbd> | Cycle the sort: time, title, directory |
 | <kbd>t</kbd> | Cycle the tag filter: off, any tag, then each tag in turn |
 | <kbd>.</kbd> | Show expired sessions |
+| <kbd>,</kbd> | Show unnamed sessions — what running a slash command left behind |
 | <kbd>c</kbd> | Narrow to the selected session's directory |
 | <kbd>g</kbd> | Nest derived sessions under the ones they came from |
 | <kbd>u</kbd> | Go to the parent of the selected session |
@@ -253,6 +277,13 @@ csm derive --fast             # skip the model, build the handoff from the trans
 csm derive --note "Start with the failing test."
 ```
 
+Writing the handoff replays the whole parent conversation through the model in
+one API call, billed to your Claude account, so `derive` says what it is about
+to spend on and asks first. `--yes` skips the question. While it runs it reports
+which phase it is in — reading the conversation, the model reading it, writing
+the handoff — because loading a multi-megabyte transcript happens before the
+model is reached, and a silent run looks the same whether it is working or hung.
+
 It forks the parent to write the handoff, so the parent transcript is left
 exactly as it was — the summary request never becomes part of the conversation
 you are trying to preserve. The handoff lands in `~/.claude/csm/handoff/`, the
@@ -277,6 +308,26 @@ A derived session whose parent is filtered out of the view is listed at the top
 level rather than hidden, and `csm untag` and `csm prune` leave the archive of
 any session a tree hangs off alone — dropping it would strand the branches under
 a root that no longer exists.
+
+### What the list leaves out
+
+Two kinds of session are hidden until you ask for them, and the header says how
+many of each.
+
+Sessions whose transcript Claude Code has already deleted are listed only with
+<kbd>.</kbd> or `-a`; nothing is left to restore, so they are there to show you
+what was lost rather than to resume.
+
+Sessions Claude Code never named are hidden by <kbd>,</kbd>. It writes an
+`ai-title` once a session has a conversation in it, so the unnamed ones are what
+`/plugins`, `/login` or a stray keystroke left behind. This is Claude Code's own
+judgement rather than a threshold csm invented, and it separates cleanly: across
+94 sessions here, the named ones had a median of 198 messages and the unnamed a
+median of 2, with no named session under 7.
+
+Two things are never treated as unnamed: a session from the last hour, which has
+not been titled *yet* rather than never, and one csm derived from another, which
+carries csm's own label and a recorded parent.
 
 ## How it works
 

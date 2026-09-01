@@ -268,6 +268,30 @@ export function scanSessions({ refresh = false } = {}) {
   return sessions;
 }
 
+/**
+ * Sessions Claude Code never gave a name to.
+ *
+ * It writes an `ai-title` record once a session has an actual conversation in
+ * it, so the ones without a title are what running a slash command leaves
+ * behind: `/plugins`, `/login`, a stray `1`. On this machine every unnamed
+ * session had a median of 2 messages and every named one a median of 198, with
+ * no named session under 7 — so this is Claude Code's own judgement rather than
+ * a threshold csm invented.
+ *
+ * The grace period matters: a session started a minute ago has not been named
+ * *yet*, which is a different thing from never being named, and hiding the
+ * conversation someone just closed would be the worst possible miss.
+ */
+export function isUnnamed(session, now = Date.now()) {
+  if (!session || session.title) return false;
+  // A derived session carries csm's own label, `↑ <what it came from>`, and a
+  // recorded parent. Claude Code will not have titled it yet, but it is the
+  // opposite of a leftover: someone deliberately started it to continue work.
+  if (session.parent) return false;
+  const age = now - new Date(session.updatedAt || 0).getTime();
+  return !(age < 60 * 60 * 1000);
+}
+
 export const SORT_MODES = ['time', 'title', 'dir'];
 
 /**
