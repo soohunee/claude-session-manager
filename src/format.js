@@ -100,6 +100,14 @@ export function humanBytes(n) {
   return (n / 1024 / 1024).toFixed(1) + 'MB';
 }
 
+/** A token count at a glance: 900, 12k, 331k, 1.2M. */
+export function humanTokens(n) {
+  if (!n) return '-';
+  if (n < 1000) return String(n);
+  if (n < 1000000) return Math.round(n / 1000) + 'k';
+  return (n / 1000000).toFixed(1) + 'M';
+}
+
 export function plural(n, one, many) {
   return n + ' ' + (n === 1 ? one : many || one + 's');
 }

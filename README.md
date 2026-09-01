@@ -43,21 +43,21 @@ indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
 ```
- csm 0.2.3              enter  Resume           a      Archive          c      This dir only
+ csm 0.3.0              enter  Resume           a      Archive          c      This dir only
  4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
  sort time              r      Remote control   s      Sort             u      Go to parent
  filter ref             y      Print cmd        t      Tag filter       p      Preview
                         n      New from this    .      Show expired     ?      Help
                         d      Untag            ,      Show unnamed     esc    Quit
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  when     msgs title                                             directory                      tags
-> 2h ago   144  Billing refactor — split invoice service          ~/work/api                     #billing
-  1d ago   88   Terraform for the new billing queue               ~/work/infra                   #billing
-  4d ago   31   Refactor the auth middleware                      ~/work/api
-  1w ago   459  Refactoring notes and cleanup pass                ~/scratch
+  when     msgs ctx   title                                           directory                      tags
+> 2h ago   144  412k  Billing refactor — split invoice service        ~/work/api                     #billing
+  1d ago   88   96k   Terraform for the new billing queue             ~/work/infra                   #billing
+  4d ago   31   31k   Refactor the auth middleware                    ~/work/api
+  1w ago   459  178k  Refactoring notes and cleanup pass              ~/scratch
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 Billing refactor — split invoice service
-2026-09-01 07:31 · 144 messages · main · archived
+2026-09-01 07:45 · 144 messages · 412,000 tokens of context · main · archived
 ~/work/api
 0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
 
@@ -209,6 +209,7 @@ csm resume billing -- --model opus   # extra flags go straight to claude
 | `--note <text>` | With `derive`: extra instructions for the new session |
 | `--model <name>` | Model to write the handoff with (default: your usual one) |
 | `--no-archive` | With `tag`: record the tag but do not archive |
+| `--context-window <n>` | Show context as a percentage of this (`200k`, `1m`, `500000`) |
 | `--refresh` | Ignore the metadata cache and re-read every file |
 | `-h, --help` | Show help |
 | `-v, --version` | Show version |
@@ -344,6 +345,29 @@ median of 2, with no named session under 7.
 Two things are never treated as unnamed: a session from the last hour, which has
 not been titled *yet* rather than never, and one csm derived from another, which
 carries csm's own label and a recorded parent.
+
+### How full a session is
+
+The `ctx` column is how much context the session was holding the last time the
+model answered in it: the whole prompt, cache hits included, which is what
+Claude Code sent. It falls back down after a compaction, which is the honest
+thing for it to do — the question it answers is "how much room is left", not
+"how big did this ever get".
+
+It is a token count and not a percentage, because csm does not know your context
+window. The size is not recorded in the transcript, is not in `settings.json`,
+and moves with the model and with `claude --autocompact`, whose own range is
+100k to 1M. Across 2,175 usage records here the largest single prompt was
+714,929 tokens, so any fixed denominator csm picked would already be wrong for
+somebody. Tell it yours and it will do the arithmetic:
+
+```bash
+csm --context-window 1m          # or 200k, or 500000
+export CSM_CONTEXT_WINDOW=1000000
+```
+
+With a window set the column shows a percentage, and goes amber past 70% and red
+past 90% — the sessions worth handing to a fresh one with <kbd>n</kbd>.
 
 ## How it works
 

@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { width, truncate, pad, relTime, humanBytes, FRAMES, c } from './format.js';
+import { width, truncate, pad, relTime, humanBytes, humanTokens, FRAMES, c } from './format.js';
 import { tailMessages } from './preview.js';
 import { sortSessions, isUnnamed, SORT_MODES } from './scan.js';
 import { buildTree } from './links.js';
@@ -202,19 +202,38 @@ function tagWidth(page, cols) {
 function columns(cols, tagCol) {
   const time = 9;
   const msgs = 5;
+  const ctx = 6;
   const cwd = Math.max(12, Math.min(30, Math.floor(cols * 0.28)));
-  return { time, msgs, cwd, title: Math.max(10, cols - time - msgs - cwd - tagCol - 6) };
+  return { time, msgs, ctx, cwd, title: Math.max(10, cols - time - msgs - ctx - cwd - tagCol - 6) };
+}
+
+/**
+ * How much context the session was holding when it was last answered.
+ *
+ * Shown as a count rather than a percentage on purpose: the size of the window
+ * is not in the transcript, is not in settings.json, and moves with the model
+ * and with `claude --autocompact`. A percentage would need a denominator csm
+ * would be inventing. Pass one with `--context-window` and it will use it.
+ */
+function contextCell(s, window) {
+  if (!s.contextTokens) return c.dim(pad('-', 6));
+  if (!window) return c.dim(pad(humanTokens(s.contextTokens), 6));
+  const pct = Math.round((s.contextTokens / window) * 100);
+  const text = pad(pct + '%', 6);
+  if (pct >= 90) return c.red(text);
+  if (pct >= 70) return c.yellow(text);
+  return c.dim(text);
 }
 
 /** The column labels. `msgs` is the one nobody can guess from the numbers. */
-function renderHeader(cols, tagCol) {
+function renderHeader(cols, tagCol, window) {
   const w = columns(cols, tagCol);
-  const line = `  ${pad('when', w.time)}${pad('msgs', w.msgs)}${pad('title', w.title)} ${pad('directory', w.cwd)}${pad(tagCol ? ' tags' : '', tagCol)}`;
+  const line = `  ${pad('when', w.time)}${pad('msgs', w.msgs)}${pad(window ? 'ctx%' : 'ctx', w.ctx)}${pad('title', w.title)} ${pad('directory', w.cwd)}${pad(tagCol ? ' tags' : '', tagCol)}`;
   return c.dim(line);
 }
 
-function renderRow(s, cols, selected, tagCol, repeated = false) {
-  const { time: timeCol, msgs: msgCol, cwd: cwdCol, title: titleCol } = columns(cols, tagCol);
+function renderRow(s, cols, selected, tagCol, repeated = false, window = null) {
+  const { time: timeCol, msgs: msgCol, ctx: ctxCol, cwd: cwdCol, title: titleCol } = columns(cols, tagCol);
   const tagText = tagsOf(s);
 
   const marker = selected ? '>' : ' ';
@@ -227,10 +246,11 @@ function renderRow(s, cols, selected, tagCol, repeated = false) {
   const cwd = pad(repeated ? '' : shortPath(s.cwd, cwdCol), cwdCol);
   const tag = pad(tagText, tagCol);
 
-  const body = `${marker} ${time}${msgs}${title} ${cwd}${tag}`;
+  const ctxText = s.contextTokens ? (window ? Math.round((s.contextTokens / window) * 100) + '%' : humanTokens(s.contextTokens)) : '-';
+  const body = `${marker} ${time}${msgs}${pad(ctxText, ctxCol)}${title} ${cwd}${tag}`;
   if (selected) return c.inverse(pad(body, cols - 1));
   if (!s.resumable) return c.dim(body);
-  return `${marker} ${c.dim(time)}${c.dim(msgs)}${title} ${c.blue(cwd)}${c.magenta(tag)}`;
+  return `${marker} ${c.dim(time)}${c.dim(msgs)}${contextCell(s, window)}${title} ${c.blue(cwd)}${c.magenta(tag)}`;
 }
 
 function absTime(ts) {
@@ -253,6 +273,8 @@ function renderPreview(s, cols, height, cache) {
 
   const meta = [
     `${absTime(s.updatedAt)} · ${s.messages || 0} messages`,
+    s.contextTokens ? `· ${s.contextTokens.toLocaleString()} tokens of context` : '',
+    s.model ? `· ${s.model}` : '',
     s.gitBranch ? `· ${s.gitBranch}` : '',
     s.archived ? '· archived' : '',
   ]
@@ -373,7 +395,7 @@ function helpOverlay(cols, rows) {
  * line that truncated on a narrow terminal, so the features a new user most
  * needed pointing out were the first to disappear.
  */
-export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, unnamed = false, dir = null, tag: taggedOnly = null, tree = false, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
+export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, unnamed = false, dir = null, tag: taggedOnly = null, tree = false, contextWindow = null, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -583,13 +605,13 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       const rule = c.dim('─'.repeat(Math.min(cols - 1, 100)));
       const page = filtered.slice(offset, offset + listHeight);
       const tagCol = tagWidth(page, cols);
-      const lines = [...head, rule, renderHeader(cols, tagCol)];
+      const lines = [...head, rule, renderHeader(cols, tagCol, contextWindow)];
       for (let i = 0; i < listHeight; i++) {
         const s = page[i];
         // The first row of a page always prints its directory, so scrolling
         // never leaves the column blank with nothing above it to inherit from.
         const repeated = i > 0 && page[i - 1] && page[i - 1].cwd === s?.cwd;
-        lines.push(s ? renderRow(s, cols, offset + i === cursor, tagCol, repeated) : '');
+        lines.push(s ? renderRow(s, cols, offset + i === cursor, tagCol, repeated, contextWindow) : '');
       }
       lines.push(rule);
 

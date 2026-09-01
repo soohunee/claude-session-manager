@@ -16,7 +16,7 @@ process.env.CLAUDE_CONFIG_DIR = root;
 process.stdout.isTTY = true;
 delete process.env.NO_COLOR;
 
-const { width, truncate, pad, relTime, c } = await import('../src/format.js');
+const { width, truncate, pad, relTime, humanTokens, c } = await import('../src/format.js');
 const { encodeProjectPath, projectsDir } = await import('../src/paths.js');
 const { parseTranscript, scanSessions, sortSessions, isUnnamed } = await import('../src/scan.js');
 const { tailMessages } = await import('../src/preview.js');
@@ -925,4 +925,58 @@ test('secrets pasted into a conversation do not reach the handoff', () => {
   const written = writeHandoff('gate-test', `a summary quoting ${token}`);
   assert.equal(fs.readFileSync(written, 'utf8').includes(token), false);
   fs.unlinkSync(handoffPathFor('gate-test'));
+});
+
+test('context is read from the last answered turn, cache included', () => {
+  const usage = (read, create, input) => ({
+    type: 'assistant',
+    cwd: CWD,
+    timestamp: '2026-05-01T00:00:00.000Z',
+    message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: create, output_tokens: 40 } },
+  });
+  writeTranscript('ctx-1', [
+    { type: 'user', cwd: CWD, timestamp: '2026-05-01T00:00:00.000Z', message: { role: 'user', content: 'go' } },
+    usage(1000, 0, 50),
+    // The last answered turn wins: after a compaction the number drops, and
+    // reporting the peak would say a session is full when it is not.
+    usage(300, 20, 5),
+    { type: 'ai-title', aiTitle: 'Context test', sessionId: 'ctx-1' },
+  ]);
+  const found = scanSessions({ refresh: true }).find((x) => x.id === 'ctx-1');
+  assert.equal(found.contextTokens, 325);
+  assert.equal(found.model, 'claude-opus-5');
+
+  writeTranscript('ctx-none', fixtureLines('No usage here', 'hello'));
+  const bare = scanSessions({ refresh: true }).find((x) => x.id === 'ctx-none');
+  assert.equal(bare.contextTokens, null, 'a transcript without usage reports nothing');
+});
+
+test('token counts are abbreviated, and nothing is invented for a missing one', () => {
+  assert.equal(humanTokens(0), '-');
+  assert.equal(humanTokens(null), '-');
+  assert.equal(humanTokens(900), '900');
+  assert.equal(humanTokens(12000), '12k');
+  assert.equal(humanTokens(331268), '331k');
+  assert.equal(humanTokens(1250000), '1.3M');
+});
+
+test('a context window has to be given before a percentage is shown', async () => {
+  const heavy = { ...LIVE, id: 'h', label: 'Heavy', contextTokens: 500000, tags: [] };
+  const counted = await drivePicker([heavy], []);
+  // csm cannot know the window: it is not in the transcript, not in settings,
+  // and moves with --autocompact. So the default is the number it does know.
+  assert.match(counted.screen, /500k/);
+  assert.match(counted.screen, /\bctx\b/);
+  assert.equal(counted.screen.includes('%'), false);
+
+  const asPercent = await drivePicker([heavy], [], { contextWindow: 1000000 });
+  assert.match(asPercent.screen, /50%/);
+  assert.match(asPercent.screen, /ctx%/);
+});
+
+test('--context-window accepts k, m and a plain number, and refuses nonsense', () => {
+  assert.equal(parseArgs(['--context-window', '200k']).opts.contextWindow, 200000);
+  assert.equal(parseArgs(['--context-window', '1m']).opts.contextWindow, 1000000);
+  assert.equal(parseArgs(['--context-window', '500000']).opts.contextWindow, 500000);
+  assert.equal(parseArgs([]).opts.contextWindow, null);
 });

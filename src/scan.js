@@ -4,7 +4,7 @@ import { projectsDir, historyFile, archiveDir, indexFile } from './paths.js';
 import { readJson, writeJson, loadTags } from './store.js';
 import { loadLinks } from './links.js';
 
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 
 /** Pull readable text out of a message record's `content` (string or block array). */
 export function textOf(message) {
@@ -41,6 +41,8 @@ export function parseTranscript(file) {
     messages: 0,
     firstSeen: null,
     lastSeen: null,
+    contextTokens: null,
+    model: null,
   };
 
   for (const line of raw.split('\n')) {
@@ -69,6 +71,21 @@ export function parseTranscript(file) {
     if (d.timestamp) {
       if (!meta.firstSeen) meta.firstSeen = d.timestamp;
       meta.lastSeen = d.timestamp;
+    }
+    if (isAssistant && !d.isSidechain) {
+      // What the model was actually sent on its last turn: the whole prompt,
+      // cache hits included. That is the context in use at the point the
+      // session was left, so it drops back down after a compaction, which is
+      // the honest thing for it to do.
+      const u = d.message?.usage;
+      if (u && typeof u === 'object') {
+        const total =
+          (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+        if (total > 0) {
+          meta.contextTokens = total;
+          if (d.message.model) meta.model = d.message.model;
+        }
+      }
     }
     if ((isUser || isAssistant) && !d.isSidechain) {
       meta.messages++;

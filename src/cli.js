@@ -23,7 +23,7 @@ import { extractHandoff, summarizeHandoff, frameHandoff, writeHandoff } from './
 import { claudeHome, projectsDir, settingsFile, handoffDir } from './paths.js';
 import { pick } from './tui.js';
 import { searchTranscript, snippet } from './search.js';
-import { c, pad, truncate, relTime, plural, humanBytes, spinner, confirm } from './format.js';
+import { c, pad, truncate, relTime, plural, humanBytes, humanTokens, spinner, confirm } from './format.js';
 
 const pkg = JSON.parse(
   fs.readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')
@@ -67,6 +67,8 @@ ${c.bold('OPTIONS')}
   -y, --yes                   With \`derive\`: do not ask before spending on the model
       --note <text>           With \`derive\`: extra instructions for the new session
       --model <name>          Model to write the handoff with (default: your usual one)
+      --context-window <n>    Show context as a % of this (e.g. 200k, 1m); csm cannot
+                              know your window, so it shows a token count without it
       --no-archive            With \`tag\`: record the tag but don't archive
       --refresh               Ignore the metadata cache and re-read every file
   -h, --help                  Show this help
@@ -95,7 +97,7 @@ Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
 
 export function parseArgs(argv) {
-  const opts = { tags: [], dir: null, limit: null, all: false, unnamed: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, yes: false, note: null, model: null };
+  const opts = { tags: [], dir: null, limit: null, all: false, unnamed: false, json: false, session: null, archive: true, refresh: false, tagged: false, sort: 'time', preview: false, mode: 'resume', print: false, fast: false, yes: false, note: null, model: null, contextWindow: null };
   const rest = [];
   const passthrough = [];
   let i = 0;
@@ -126,6 +128,15 @@ export function parseArgs(argv) {
     else if (a === '-y' || a === '--yes') opts.yes = true;
     else if (a === '--note') opts.note = argv[++i] || null;
     else if (a === '--model') opts.model = argv[++i] || null;
+    else if (a === '--context-window') {
+      const raw = String(argv[++i] || '').trim().toLowerCase();
+      const m = raw.match(/^(\d+(?:\.\d+)?)\s*([km]?)$/);
+      if (!m) {
+        console.error(c.red(`--context-window wants a number like 200k, 1m or 500000, not ${JSON.stringify(raw)}.`));
+        process.exit(1);
+      }
+      opts.contextWindow = Math.round(Number(m[1]) * (m[2] === 'm' ? 1e6 : m[2] === 'k' ? 1e3 : 1));
+    }
     else if (a === '--refresh') opts.refresh = true;
     else if (a === '--tagged') opts.tagged = true;
     else if (a === '--unnamed') opts.unnamed = true;
@@ -175,7 +186,9 @@ export function treePrefix(depth) {
   return depth ? '  '.repeat(depth - 1) + '\u2514 ' : '';
 }
 
-function printList(sessions) {
+const contextPct = (s, window) => (s.contextTokens ? Math.round((s.contextTokens / window) * 100) + '%' : '-');
+
+function printList(sessions, window = null) {
   if (!sessions.length) {
     console.log(c.dim('No sessions matched.'));
     return;
@@ -187,7 +200,10 @@ function printList(sessions) {
       `${flag} ${c.dim(s.id.slice(0, 8))} ${c.dim(pad(relTime(s.updatedAt), 9))}${pad(
         s.messages ? String(s.messages) : '-',
         5
-      )}${pad(treePrefix(s.depth || 0) + s.label, 48)} ${c.blue(truncate(homeShort(s.cwd), 34))} ${tags}`
+      )}${c.dim(pad(window ? contextPct(s, window) : humanTokens(s.contextTokens), 6))}${pad(
+        treePrefix(s.depth || 0) + s.label,
+        44
+      )} ${c.blue(truncate(homeShort(s.cwd), 34))} ${tags}`
     );
   }
 }
@@ -498,7 +514,7 @@ function cmdTree(opts, rest) {
   const links = loadLinks().links;
   const tree = buildTree(sessions, links);
   if (opts.json) return console.log(JSON.stringify(tree, null, 2));
-  printList(tree);
+  printList(tree, opts.contextWindow);
   const derived = tree.filter((s) => s.depth > 0).length;
   const orphans = tree.filter((s) => s.depth === 0 && links[s.id]).length;
   if (!Object.keys(links).length) {
@@ -764,11 +780,12 @@ async function cmdPick(opts, rest, passthrough) {
     sort: opts.sort,
     expired: opts.all,
     unnamed: opts.unnamed,
+    contextWindow: opts.contextWindow || Number(process.env.CSM_CONTEXT_WINDOW) || null,
     dir: opts.dir,
     tag: opts.tags.length === 1 ? opts.tags[0] : opts.tagged ? '*' : null,
   });
   if (!chosen) {
-    if (!process.stdout.isTTY) printList(sessions);
+    if (!process.stdout.isTTY) printList(sessions, opts.contextWindow);
     return;
   }
   // Deriving is its own command rather than a way of resuming, so it does not
@@ -829,7 +846,7 @@ export async function main(argv) {
     case 'list': {
       const sessions = selectSessions(opts, rest.slice(1).join(' ') || null);
       if (opts.json) return console.log(JSON.stringify(sessions, null, 2));
-      return printList(sessions);
+      return printList(sessions, opts.contextWindow);
     }
     case 'search':
       return cmdSearch(opts, rest.slice(1));
