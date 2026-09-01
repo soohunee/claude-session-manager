@@ -27,7 +27,7 @@ const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/sto
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
 const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
 const { recordLink, removeLink, loadLinks, linkedIds, buildTree } = await import('../src/links.js');
-const { extractHandoff, frameHandoff } = await import('../src/handoff.js');
+const { extractHandoff, frameHandoff, redact, writeHandoff, handoffPathFor } = await import('../src/handoff.js');
 
 const CWD = '/tmp/csm-fixture-project';
 
@@ -899,4 +899,30 @@ test('a failed summary still derives, from the transcript', async () => {
   assert.equal(result.action, 'derive');
   assert.equal(result.handoff, null);
   assert.equal(result.warning, 'context too long');
+});
+
+test('secrets pasted into a conversation do not reach the handoff', () => {
+  const token = 'npm_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+  assert.equal(redact(`use ${token} to publish`), 'use [redacted] to publish');
+  for (const secret of ['ghp_' + 'z'.repeat(36), 'sk-ant-api03-' + 'x'.repeat(40), 'AKIAIOSFODNN7EXAMPLE', 'xoxb-1234567890-abcdefghij']) {
+    assert.equal(redact(secret), '[redacted]', secret.slice(0, 8));
+  }
+  // Not everything that starts the same way is a key.
+  assert.equal(redact('npm_short and sk-tiny'), 'npm_short and sk-tiny');
+
+  // The transcript route copies prompts verbatim, which is exactly how a pasted
+  // token would end up in a second file and then in a fresh session's context.
+  const file = writeTranscript('leaky', [
+    { type: 'user', cwd: CWD, timestamp: '2026-04-01T00:00:00.000Z', message: { role: 'user', content: `here is my token ${token}` } },
+    { type: 'user', cwd: CWD, timestamp: '2026-04-01T00:01:00.000Z', message: { role: 'user', content: '[Request interrupted by user]' } },
+  ]);
+  const md = extractHandoff({ id: 'leaky', label: 'Leaky', cwd: CWD, file, messages: 2 });
+  assert.equal(md.includes(token), false, 'the token must not survive extraction');
+  assert.match(md, /\[redacted\]/);
+  assert.equal(md.includes('Request interrupted'), false, 'the interruption marker is not a prompt');
+
+  // The model-written route goes through the same gate on the way to disk.
+  const written = writeHandoff('gate-test', `a summary quoting ${token}`);
+  assert.equal(fs.readFileSync(written, 'utf8').includes(token), false);
+  fs.unlinkSync(handoffPathFor('gate-test'));
 });

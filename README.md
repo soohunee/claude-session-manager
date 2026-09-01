@@ -299,6 +299,13 @@ you are trying to preserve. The handoff lands in `~/.claude/csm/handoff/`, the
 parent is archived so it outlives Claude Code's cleanup, and the new session
 opens already pointed at the document.
 
+Either way, shapes that are always a secret — npm tokens, GitHub and Anthropic
+keys, AWS access keys, private keys, JWTs — are cut out on the way into the
+handoff. A transcript records verbatim whatever was pasted into the
+conversation, and a handoff would put that in a second file and then into a
+fresh session's context. It is a net rather than a guarantee, and it does not
+touch the transcript itself, which is Claude Code's own file.
+
 `--fast` skips the model entirely and assembles the handoff from the transcript:
 what was asked, which files were touched, which commands ran. It is instant and
 free, but it records what happened rather than why. csm also falls back to it on
