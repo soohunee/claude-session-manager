@@ -454,6 +454,53 @@ async function cmdDerive(opts, rest, passthrough) {
   return finishDerive(parent, passthrough, { text, cost, opts });
 }
 
+/** How much handoff is worth putting on the command line rather than pointing at. */
+const INLINE_LIMIT = 64 * 1024;
+
+/**
+ * Build the argv that starts the derived session.
+ *
+ * Two things here are load-bearing, and both were learned the hard way.
+ *
+ * The prompt goes first. `--add-dir` takes a variadic list of directories, so
+ * anything non-option that follows it is read as another directory: with the
+ * prompt at the end it was swallowed whole and Claude Code opened an empty
+ * session that knew nothing, silently, because in interactive mode there is no
+ * missing-prompt error to see.
+ *
+ * And the handoff is carried in the prompt rather than referenced by path,
+ * whenever it is small enough. Asking the session to read a file means it opens
+ * knowing nothing and has to spend its first turn fetching context it could
+ * have started with, behind a tool call that can be declined. Inlining removes
+ * the file access, the round trip and the `--add-dir` along with them.
+ */
+export function buildDeriveArgs(child, mdPath, { note = null, passthrough = [], read = fs.readFileSync } = {}) {
+  let doc = null;
+  try {
+    const text = read(mdPath, 'utf8');
+    if (Buffer.byteLength(text, 'utf8') <= INLINE_LIMIT) doc = text.trim();
+  } catch {
+    /* fall through to pointing at the path */
+  }
+
+  const tail =
+    `Get up to speed from that, then tell me in a few lines what you understand the state of the work ` +
+    `to be and what you think comes next. Do not change anything until I say so.` +
+    (note ? `\n\n${note}` : '');
+
+  const seed = doc
+    ? `A previous session ran out of room, so its context has been handed to you. This is the handoff it wrote:\n\n` +
+      `----- handoff -----\n${doc}\n----- end -----\n\n${tail}`
+    : `A previous session ran out of room, so its context has been handed to you.\n\n` +
+      `Read ${mdPath} — the handoff it wrote, too large to include here.\n\n${tail}`;
+
+  const args = [seed, '--session-id', child, ...passthrough];
+  // Only needed when the session has to go and read the file itself, and kept
+  // last so its variadic list has nothing left to swallow.
+  if (!doc) args.push('--add-dir', path.dirname(mdPath));
+  return { args, seed, inlined: Boolean(doc) };
+}
+
 /**
  * Everything after the handoff exists: write it down, record the lineage, and
  * hand the terminal to Claude Code.
@@ -472,16 +519,9 @@ function finishDerive(parent, passthrough, { text = null, cost = null, opts = {}
   const child = crypto.randomUUID();
   recordLink(child, parent.id, { handoff: mdPath, cwd: parent.cwd, title: parent.label });
 
-  const seed =
-    `A previous session ran out of room, so its context has been handed to you.\n\n` +
-    `Read ${mdPath} — it is a handoff document written for exactly this moment — and get up to speed.\n\n` +
-    `Then tell me in a few lines what you understand the state of the work to be and what you think comes next. ` +
-    `Do not change anything until I say so.` +
-    (opts.note ? `\n\n${opts.note}` : '');
-
-  const args = ['--session-id', child, '--add-dir', handoffDir(), ...passthrough, seed];
+  const { args, seed } = buildDeriveArgs(child, mdPath, { note: opts.note, passthrough });
   if (opts.print) {
-    console.log(`cd ${shellQuote(parent.cwd)} && claude --session-id ${child} --add-dir ${shellQuote(handoffDir())} ${shellQuote(seed)}`);
+    console.log(`cd ${shellQuote(parent.cwd)} && claude ${args.map(shellQuote).join(' ')}`);
     return;
   }
 
