@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { width, truncate, pad, relTime, humanBytes, c } from './format.js';
+import { width, truncate, pad, relTime, humanBytes, FRAMES, c } from './format.js';
 import { tailMessages } from './preview.js';
 import { sortSessions, isUnnamed, SORT_MODES } from './scan.js';
 import { buildTree } from './links.js';
@@ -301,27 +301,42 @@ function wrapText(text, max) {
   return out;
 }
 
+/** Centre one line inside a given width. */
+function centre(text, inner) {
+  const left = Math.max(0, Math.floor((inner - width(text)) / 2));
+  return ' '.repeat(left) + text;
+}
+
 /**
- * Draw a box over the middle of the screen, leaving the list visible around it.
+ * Draw a dialog over the middle of the screen, leaving the list visible around
+ * it.
  *
- * Untagging deletes the archive with the tag, which is the only thing in the
- * picker that destroys something. Keeping the list behind the box means the
- * question is asked with its answer in view: you can still see which session
- * is about to lose its copy.
+ * The list stays behind the box on purpose: a question about a session is worth
+ * asking with the session still in view. Choices are buttons picked with the
+ * arrows and enter rather than a line of key hints, because a dialog that
+ * recites its own shortcuts is asking the reader to do the work of a menu.
  */
-function drawBox(lines, cols, title, body, hint) {
-  const content = [title, '', ...body, '', hint];
-  const room = Math.max(20, Math.min(64, cols - 8));
-  const inner = Math.min(Math.max(...content.map(width)) + 2, room);
-  const left = Math.max(0, Math.floor((cols - inner - 2) / 2));
+function drawDialog(lines, cols, { title, body = [], buttons = [], at = 0 }) {
+  const row = buttons.map((b, i) => (i === at ? c.inverse(` ${b.label} `) : c.dim(` ${b.label} `))).join('  ');
+  const content = ['', ...body, ...(buttons.length ? ['', row] : []), ''];
+  const label = `\u2500 <${title}> `;
+
+  // `inner` is the full outer width, borders included, so every line is built
+  // to the same number and the frame cannot come out ragged.
+  const room = Math.max(28, Math.min(64, cols - 8));
+  const inner = Math.min(Math.max(width(label) + 3, ...content.map((l) => width(l) + 6)), room);
+  const cell = inner - 6;
+
   const pane = [
-    c.yellow('\u250c' + '\u2500'.repeat(inner) + '\u2510'),
-    ...content.map((l, i) => {
-      const painted = i === 0 ? c.bold(pad(l, inner - 2)) : i === content.length - 1 ? c.dim(pad(l, inner - 2)) : pad(l, inner - 2);
-      return c.yellow('\u2502') + ' ' + painted + ' ' + c.yellow('\u2502');
+    c.yellow('\u256d' + label + '\u2500'.repeat(Math.max(0, inner - 2 - width(label))) + '\u256e'),
+    ...content.map((l) => {
+      const text = l === row && buttons.length ? centre(l, cell) : l;
+      return c.yellow('\u2502') + '  ' + pad(text, cell) + '  ' + c.yellow('\u2502');
     }),
-    c.yellow('\u2514' + '\u2500'.repeat(inner) + '\u2518'),
+    c.yellow('\u2570' + '\u2500'.repeat(Math.max(0, inner - 2)) + '\u256f'),
   ];
+
+  const left = Math.max(0, Math.floor((cols - inner) / 2));
   const top = Math.max(0, Math.floor((lines.length - pane.length) / 2));
   for (let i = 0; i < pane.length && top + i < lines.length; i++) {
     lines[top + i] = ' '.repeat(left) + pane[i];
@@ -341,6 +356,8 @@ function helpOverlay(cols, rows) {
   lines.push('');
   lines.push(c.dim('  A key shown dim in the menu does not apply to the highlighted session.'));
   lines.push(c.dim('  Move with j k or the arrows, ctrl-d and ctrl-u by half a page, G to the end.'));
+  lines.push(c.dim('  In a dialog: left and right pick a button, enter runs it, esc backs out.'));
+  lines.push(c.dim('  The safe button is always the one already selected.'));
   lines.push('');
   lines.push(c.dim('  Any key closes this.'));
   return lines.slice(0, rows).map((l) => truncate(l, cols - 1));
@@ -436,24 +453,23 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
      * part: the picker vanished, then asked, then sat silent.
      */
     const askDerive = (session) => {
-      const size = session.sizeBytes ? ` · ${humanBytes(session.sizeBytes)}` : '';
-      const w = 56;
+      const size = session.sizeBytes ? ` \u00b7 ${humanBytes(session.sizeBytes)}` : '';
       overlay = {
-        kind: 'confirm',
-        title: 'New session from this one',
+        kind: 'dialog',
+        title: 'New session from this',
         body: [
-          c.bold(truncate(session.label, w)),
+          c.bold(truncate(session.label, 52)),
           c.dim(`${session.messages || 0} messages${size}`),
           '',
-          ...wrapText('It writes down where things stand and opens a fresh session on that. Doing it with the model replays this whole conversation in one API call, billed to your account.', w),
-          '',
-          ...wrapText(c.cyan('f') + ' builds the handoff from the transcript instead: instant and free, but it records what happened rather than why.', w),
+          'The model re-reads all of it: one billed API call.',
+          'From the transcript is instant and free.',
         ],
-        hint: 'y model · f transcript · any other key cancels',
-        choices: {
-          y: () => runDerive(session, false),
-          f: () => runDerive(session, true),
-        },
+        buttons: [
+          { label: 'Cancel' },
+          { label: 'From transcript', run: () => runDerive(session, true) },
+          { label: 'Use the model', run: () => runDerive(session, false) },
+        ],
+        at: 0,
       };
       draw();
     };
@@ -467,17 +483,23 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
         writing: 'writing the handoff',
       };
       let phase = phases.loading;
+      let tick = 0;
       const paint = () => {
+        const secs = Math.round((Date.now() - started) / 1000);
         overlay = {
           kind: 'busy',
           title: 'Writing the handoff',
-          body: [c.bold(truncate(session.label, 56)), '', `${phase}…`],
-          hint: `${Math.round((Date.now() - started) / 1000)}s elapsed`,
+          body: [
+            c.bold(truncate(session.label, 52)),
+            '',
+            `${c.cyan(FRAMES[tick++ % FRAMES.length])} ${phase}` + c.dim(`   ${secs}s`),
+          ],
+          buttons: [],
         };
         draw();
       };
       paint();
-      const ticker = setInterval(paint, 1000);
+      const ticker = setInterval(paint, 120);
       actions
         .summarize(session, (next) => {
           phase = phases[next] || next;
@@ -585,7 +607,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
             : c.dim(' NORMAL')) +
           (filtered.length ? c.dim(`  [${cursor + 1}/${filtered.length}]`) : c.red('  no match'))
       );
-      if (overlay?.kind === 'confirm' || overlay?.kind === 'busy') drawBox(lines, cols, overlay.title, overlay.body, overlay.hint);
+      if (overlay?.kind === 'dialog' || overlay?.kind === 'busy') drawDialog(lines, cols, overlay);
       out.write(CLEAR + lines.join('\n'));
     }
 
@@ -629,12 +651,16 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       // A box that is working owns the keyboard until it is done. Letting keys
       // through would act on a list the running job is about to change.
       if (overlay?.kind === 'busy') return;
-      if (overlay?.kind === 'confirm') {
-        const chosen = overlay.choices[(str || '').toLowerCase()];
-        overlay = null;
-        // Only the listed keys do anything. Everything else cancels, so a stray
-        // keypress can neither delete an archive nor spend money.
-        if (chosen) chosen();
+      if (overlay?.kind === 'dialog') {
+        const n = overlay.buttons.length;
+        if (key.name === 'right' || key.name === 'tab' || key.name === 'l') overlay.at = (overlay.at + 1) % n;
+        else if (key.name === 'left' || key.name === 'h') overlay.at = (overlay.at + n - 1) % n;
+        else if (key.name === 'escape') overlay = null;
+        else if (key.name === 'return' || key.name === 'enter') {
+          const chosen = overlay.buttons[overlay.at];
+          overlay = null;
+          if (chosen.run) chosen.run();
+        }
         return draw();
       }
       if (overlay) {
@@ -688,11 +714,18 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
         const chosen = filtered[cursor];
         if (!enabledFor(chosen, 'd')) return draw();
         overlay = {
-          kind: 'confirm',
-          title: 'Remove tags?',
-          body: [truncate(chosen.label, 60), c.magenta(chosen.tags.map((t) => '#' + t).join(' '))],
-          hint: 'y to remove · any other key to keep',
-          choices: { y: () => inPlace('d', (sess) => actions.untag(sess)) },
+          kind: 'dialog',
+          title: 'Remove tags',
+          body: [
+            c.bold(truncate(chosen.label, 52)),
+            c.magenta(chosen.tags.map((t) => '#' + t).join(' ')),
+            '',
+            'The archived copy goes with the last tag.',
+          ],
+          // Cancel first and focused, as k9s does for anything destructive: the
+          // reflex to hit enter should not be the one that deletes.
+          buttons: [{ label: 'Cancel' }, { label: 'Remove', run: () => inPlace('d', (sess) => actions.untag(sess)) }],
+          at: 0,
         };
       } else if (key.name === 'a' && !key.ctrl && actions.archive) {
         return inPlace('a', (sess) => actions.archive(sess));
