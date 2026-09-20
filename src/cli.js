@@ -14,6 +14,7 @@ import {
   installCommand,
   uninstallCommand,
   commandInstalled,
+  pluginInstalled,
   hookStamp,
   hookEnd,
   resolveCurrentSession,
@@ -684,6 +685,8 @@ function cmdDoctor() {
     console.log(c.dim('    Re-run `csm init` to point it at the current one.'));
   }
   console.log(`  /persist        ${ok(commandInstalled())}`);
+  const plugin = pluginInstalled();
+  if (plugin) console.log(`  plugin          ${c.green(plugin)}`);
   console.log(`  this directory  ${current ? `${current.id.slice(0, 8)} ${c.dim('via ' + current.via)}` : c.dim('no session found')}`);
   console.log('');
   console.log(`  sessions        ${sessions.length} across ${plural(dirs.size, 'directory', 'directories')}`);
@@ -696,6 +699,14 @@ function cmdDoctor() {
   const links = loadLinks().links;
   const derived = Object.keys(links).length;
   console.log(`  derived         ${derived}${derived ? c.dim('  (see `csm tree`)') : ''}`);
+
+  if (plugin && hooksInstalled().length) {
+    console.log('');
+    console.log(c.yellow('  csm is wired up twice: once by `csm init`, once by the plugin.'));
+    console.log(c.dim('  Both carry the same hooks, so each one runs on every session. Nothing'));
+    console.log(c.dim('  breaks, but `csm uninstall` removes the `csm init` half and leaves the'));
+    console.log(c.dim('  plugin to do the work on its own.'));
+  }
 
   if (expired > 0) {
     console.log('');

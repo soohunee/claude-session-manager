@@ -25,7 +25,7 @@ const { searchTranscript, snippet } = await import('../src/search.js');
 const { parseArgs, selectSessions, buildDeriveArgs } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
-const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
+const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks, pluginInstalled } = await import('../src/install.js');
 const { recordLink, removeLink, loadLinks, linkedIds, buildTree } = await import('../src/links.js');
 const { extractHandoff, frameHandoff, redact, writeHandoff, handoffPathFor } = await import('../src/handoff.js');
 
@@ -1026,4 +1026,28 @@ test('a handoff that cannot be read still produces a usable prompt', () => {
   assert.equal(inlined, false);
   assert.match(seed, /Read \/h\/gone\.md/);
   assert.ok(args.includes('--add-dir'));
+});
+
+test('the plugin is recognised however its marketplace names it', () => {
+  const file = path.join(root, 'plugins', 'installed_plugins.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  assert.equal(pluginInstalled(), null, 'nothing is installed before the file exists');
+
+  fs.writeFileSync(file, JSON.stringify({ version: 2, plugins: { 'claude-hud@claude-hud': [{}] } }));
+  assert.equal(pluginInstalled(), null, 'somebody else\'s plugin is not ours');
+
+  // The id is `<plugin>@<marketplace>`, and csm has no say in the right-hand
+  // half: the same plugin carries a different id depending on where it was
+  // installed from, so only the name is ours to match on.
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ version: 2, plugins: { 'claude-hud@claude-hud': [{}], 'csm@some-marketplace': [{}] } })
+  );
+  assert.equal(pluginInstalled(), 'csm@some-marketplace');
+
+  fs.writeFileSync(file, '{ not json');
+  assert.equal(pluginInstalled(), null, 'an unreadable file is not an install');
+
+  fs.rmSync(file);
 });

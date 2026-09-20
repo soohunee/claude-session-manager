@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { settingsFile, commandsDir, currentDir, projectsDir, encodeProjectPath } from './paths.js';
+import { settingsFile, commandsDir, currentDir, projectsDir, encodeProjectPath, installedPluginsFile } from './paths.js';
 import { readJson, writeJson, tagsFor } from './store.js';
 import { archiveSession } from './archive.js';
 
@@ -161,6 +161,21 @@ export function uninstallCommand() {
   } catch {
     return false;
   }
+}
+
+/**
+ * The id csm is installed under as a Claude Code plugin, if it is.
+ *
+ * The plugin carries the same three hooks, so a machine wired up both ways
+ * runs each of them twice. Nothing breaks — the stamp rewrites one file and
+ * archiving the same session again lands on the same bytes — but `doctor`
+ * should say so rather than leave it to be found.
+ */
+export function pluginInstalled() {
+  const record = readJson(installedPluginsFile(), null);
+  const plugins = record?.plugins;
+  if (!plugins || typeof plugins !== 'object') return null;
+  return Object.keys(plugins).find((id) => id.split('@')[0] === 'csm') || null;
 }
 
 export function commandInstalled() {

@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# Wrapper that runs csm without needing `node` on PATH.
+#
+# It exists for the plugin: a hook runs with a minimal environment, and the
+# npm install is not what put csm there, so there is no interpreter path to
+# pin the way `csm init` pins one. The wrapper resolves an interpreter at run
+# time instead, and falls back to the usual version-manager locations when the
+# environment has no PATH worth speaking of.
+set -e
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+entry="$dir/csm.js"
+
+if command -v node >/dev/null 2>&1; then
+  exec node "$entry" "$@"
+fi
+
+for candidate in \
+  /usr/local/bin/node \
+  /opt/homebrew/bin/node \
+  /usr/bin/node \
+  "$HOME/.local/bin/node" \
+  "$HOME/.volta/bin/node"
+do
+  if [ -x "$candidate" ]; then
+    exec "$candidate" "$entry" "$@"
+  fi
+done
+
+# nvm keeps each version in its own directory and exports nothing to a
+# non-login shell, so the newest install is the best guess available.
+for candidate in "$HOME"/.nvm/versions/node/*/bin/node; do
+  [ -x "$candidate" ] && newest=$candidate
+done
+if [ -n "${newest:-}" ]; then
+  exec "$newest" "$entry" "$@"
+fi
+
+echo "csm: no node interpreter found on PATH" >&2
+exit 127

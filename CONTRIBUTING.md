@@ -40,6 +40,9 @@ opening the PR, check every place the behaviour is described:
   key table, and the recording near the top
 - `HELP` in `src/cli.js` — usage, options, and picker keys
 - `CONTRIBUTING.md`, if the workflow itself changed
+- the plugin, if a hook or the `/persist` command changed: `hooks/hooks.json`
+  and `commands/persist.md` are its copies of the pair that `csm init` writes,
+  and `claude plugin validate . --strict` checks the manifest
 
 A new picker key goes in `ACTIONS` in `src/tui.js` first. That list drives the
 on-screen menu, the `?` overlay, and which keys are dimmed for the highlighted

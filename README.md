@@ -130,6 +130,25 @@ npx claude-sessions-cli
 
 Requires Node.js 18 or newer. Tested on macOS and Linux against Claude Code 2.x.
 
+### As a Claude Code plugin
+
+csm is also a plugin, which is the tidier way to get the half that lives inside
+Claude Code:
+
+```
+/plugin install csm
+```
+
+That registers `/csm:persist` and the three hooks without writing to your
+`settings.json` at all, and removing the plugin takes them away again.
+
+It does not replace the install above. A plugin's executables go on the PATH of
+the Bash tool rather than your own shell, so the plugin gives Claude Code `csm`
+and gives you nothing to type: the picker, `csm search`, `csm derive` and the
+rest still need the npm install. Install both and everything works; `csm doctor`
+will then point out that the hooks are wired up twice and tell you which half to
+drop.
+
 ## Usage
 
 ```bash
@@ -249,6 +268,10 @@ csm -t billing-refactor
 ```
 
 A session can carry several tags, and tags may be written in any language.
+
+The command is `/csm:persist` when it arrived with the plugin: Claude Code
+namespaces a plugin's commands by the plugin they came from. It does the same
+thing.
 
 ### Continuing a session that filled up
 
