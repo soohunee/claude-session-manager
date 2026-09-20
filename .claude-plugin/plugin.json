@@ -10,7 +10,11 @@
   "homepage": "https://github.com/soohunee/claude-session-manager#readme",
   "repository": "https://github.com/soohunee/claude-session-manager",
   "license": "MIT",
-  "keywords": ["session", "resume", "transcript", "archive", "memory"],
-  "commands": ["./commands/persist.md"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": [
+    "session",
+    "resume",
+    "transcript",
+    "archive",
+    "memory"
+  ]
 }

@@ -1,0 +1,17 @@
+{
+  "name": "claude-session-manager",
+  "owner": {
+    "name": "soohunee",
+    "url": "https://github.com/soohunee"
+  },
+  "description": "csm, from the repository it is built in.",
+  "plugins": [
+    {
+      "name": "csm",
+      "source": "./",
+      "description": "Tag a session from inside Claude Code and keep its transcript past the 30-day cleanup, then find and resume it from any directory.",
+      "category": "productivity",
+      "keywords": ["session", "resume", "transcript", "archive", "memory"]
+    }
+  ]
+}

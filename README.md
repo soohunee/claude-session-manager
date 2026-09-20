@@ -133,14 +133,16 @@ Requires Node.js 18 or newer. Tested on macOS and Linux against Claude Code 2.x.
 ### As a Claude Code plugin
 
 csm is also a plugin, which is the tidier way to get the half that lives inside
-Claude Code:
+Claude Code. The repository is its own marketplace, so it installs from here:
 
 ```
-/plugin install csm
+/plugin marketplace add soohunee/claude-session-manager
+/plugin install csm@claude-session-manager
 ```
 
 That registers `/csm:persist` and the three hooks without writing to your
-`settings.json` at all, and removing the plugin takes them away again.
+`settings.json` at all, and `/plugin uninstall csm@claude-session-manager`
+takes them away again.
 
 It does not replace the install above. A plugin's executables go on the PATH of
 the Bash tool rather than your own shell, so the plugin gives Claude Code `csm`
