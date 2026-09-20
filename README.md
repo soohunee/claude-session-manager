@@ -42,33 +42,11 @@ not stay in one directory: you start something in `~/work/api`, follow it into
 indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
-```
- csm 0.3.0              enter  Resume           a      Archive          c      This dir only
- 4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
- sort time              r      Remote control   s      Sort             u      Go to parent
- filter ref             y      Print cmd        t      Tag filter       p      Preview
-                        n      New from this    .      Show expired     ?      Help
-                        d      Untag            ,      Show unnamed     esc    Quit
-────────────────────────────────────────────────────────────────────────────────────────────────────
-  when     msgs ctx   title                                           directory                      tags
-> 2h ago   144  412k  Billing refactor — split invoice service        ~/work/api                     #billing
-  1d ago   88   96k   Terraform for the new billing queue             ~/work/infra                   #billing
-  4d ago   31   31k   Refactor the auth middleware                    ~/work/api
-  1w ago   459  178k  Refactoring notes and cleanup pass              ~/scratch
-────────────────────────────────────────────────────────────────────────────────────────────────────
-Billing refactor — split invoice service
-2026-09-01 07:45 · 144 messages · 412,000 tokens of context · main · archived
-~/work/api
-0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
-
-› extract the token check into middleware
-‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
-‹ The invoice service no longer imports the auth module directly.
-
-
-────────────────────────────────────────────────────────────────────────────────────────────────────
- NORMAL  [1/4]
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/soohunee/claude-session-manager/develop/demo/demo.gif"
+       alt="csm listing sessions from four directories, previewing one, narrowing to #billing, and resuming a session from another directory"
+       width="900">
+</p>
 
 Press <kbd>Enter</kbd> and you are back in that conversation, in the right
 directory. Everything else it can do is in the menu on the right, and the menu

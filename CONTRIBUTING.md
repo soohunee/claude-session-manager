@@ -37,7 +37,7 @@ A change to what the tool does is not finished until the docs match it. Before
 opening the PR, check every place the behaviour is described:
 
 - `README.md` — the feature list, the command and option tables, the picker
-  key table, and the sample screen near the top
+  key table, and the recording near the top
 - `HELP` in `src/cli.js` — usage, options, and picker keys
 - `CONTRIBUTING.md`, if the workflow itself changed
 
@@ -45,16 +45,31 @@ A new picker key goes in `ACTIONS` in `src/tui.js` first. That list drives the
 on-screen menu, the `?` overlay, and which keys are dimmed for the highlighted
 session, so a key added anywhere else will not appear in any of them.
 
-The sample screen in the README is real output, not something written by hand:
-take it from a run at 100 columns with the preview panel open, rather than
-editing the columns to fit. The screen and the key tables go stale most easily,
-because nothing fails when they drift.
+The recording near the top of the README is real output rather than a drawing
+of one, so it goes stale the moment the picker's layout or its menu changes.
+Re-record it with `./demo/record.sh` when that happens; the recording and the
+key tables drift most easily, because nothing fails when they do.
 
 Set `CLAUDE_CONFIG_DIR` to experiment without touching your real `~/.claude`:
 
 ```bash
 export CLAUDE_CONFIG_DIR=/tmp/csm-sandbox
 ```
+
+## The README recording
+
+`demo/demo.gif` is generated, not hand-made. Re-record it whenever the picker's
+layout or its menu changes:
+
+```bash
+brew install asciinema agg tmux
+./demo/record.sh
+```
+
+The picker is driven against `demo/demo.mjs`, which hands it a fixture instead
+of the sessions on the machine running the script, so the recording stays the
+same between runs and never publishes anyone's real projects. Change what the
+recording shows by editing the keystrokes at the bottom of `demo/record.sh`.
 
 ## Releasing
 
