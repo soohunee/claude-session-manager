@@ -250,6 +250,20 @@ function shellQuote(value) {
   return `'` + String(value).replace(/'/g, `'\\''`) + `'`;
 }
 
+const SKIP_PERMISSIONS = '--dangerously-skip-permissions';
+
+/**
+ * Fold the picker's skip-permissions toggle into the flags bound for Claude Code.
+ *
+ * The toggle and `csm -- --dangerously-skip-permissions` are the same thing said
+ * two ways, so they meet here rather than in two argument builders, and asking
+ * for it both ways passes it once.
+ */
+export function withSkipPermissions(passthrough, on) {
+  if (!on || passthrough.includes(SKIP_PERMISSIONS)) return passthrough;
+  return [...passthrough, SKIP_PERMISSIONS];
+}
+
 /**
  * Restore from archive if needed, then hand the terminal over to Claude Code.
  *
@@ -841,9 +855,12 @@ async function cmdPick(opts, rest, passthrough) {
   }
   // Deriving is its own command rather than a way of resuming, so it does not
   // go through the mode below.
+  // `!` and shift+enter are resume with one flag added, so they resolve to a
+  // plain resume below and only the flag list tells them apart.
+  const flags = withSkipPermissions(passthrough, chosen.action === 'resume-skip');
   if (chosen.action === 'derive') {
     if (chosen.warning) console.log(c.yellow(`The model could not summarise it: ${chosen.warning}`) + c.dim(' — using the transcript instead.'));
-    return finishDerive(chosen.session, passthrough, {
+    return finishDerive(chosen.session, flags, {
       text: chosen.handoff?.text ?? null,
       cost: chosen.handoff?.cost ?? null,
       opts,
@@ -852,7 +869,7 @@ async function cmdPick(opts, rest, passthrough) {
   // A key pressed in the picker refines what the flags asked for: `r` and `f`
   // choose the mode, `y` only switches the result to a printed command.
   const mode = chosen.action === 'remote' || chosen.action === 'fork' ? chosen.action : opts.mode;
-  resume(chosen.session, passthrough, { mode, print: opts.print || chosen.action === 'print' });
+  resume(chosen.session, flags, { mode, print: opts.print || chosen.action === 'print' });
 }
 
 export async function main(argv) {
