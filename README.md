@@ -42,33 +42,11 @@ not stay in one directory: you start something in `~/work/api`, follow it into
 indexes every session on the machine, whichever directory it came from, and
 lets you search what was actually said in them.
 
-```
- csm 0.3.0              enter  Resume           a      Archive          c      This dir only
- 4 shown · 54 expired   f      Resume a copy    /      Filter           g      Tree
- sort time              r      Remote control   s      Sort             u      Go to parent
- filter ref             y      Print cmd        t      Tag filter       p      Preview
-                        n      New from this    .      Show expired     ?      Help
-                        d      Untag            ,      Show unnamed     esc    Quit
-────────────────────────────────────────────────────────────────────────────────────────────────────
-  when     msgs ctx   title                                           directory                      tags
-> 2h ago   144  412k  Billing refactor — split invoice service        ~/work/api                     #billing
-  1d ago   88   96k   Terraform for the new billing queue             ~/work/infra                   #billing
-  4d ago   31   31k   Refactor the auth middleware                    ~/work/api
-  1w ago   459  178k  Refactoring notes and cleanup pass              ~/scratch
-────────────────────────────────────────────────────────────────────────────────────────────────────
-Billing refactor — split invoice service
-2026-09-01 07:45 · 144 messages · 412,000 tokens of context · main · archived
-~/work/api
-0a1b2c3d-4e5f-6789-abcd-ef0123456789 #billing
-
-› extract the token check into middleware
-‹ Moving it into `requireToken` and wiring it ahead of the billing routes.
-‹ The invoice service no longer imports the auth module directly.
-
-
-────────────────────────────────────────────────────────────────────────────────────────────────────
- NORMAL  [1/4]
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/soohunee/claude-session-manager/develop/demo/demo.gif"
+       alt="csm listing sessions from four directories, previewing one, narrowing to #billing, and resuming a session from another directory"
+       width="900">
+</p>
 
 Press <kbd>Enter</kbd> and you are back in that conversation, in the right
 directory. Everything else it can do is in the menu on the right, and the menu
@@ -152,6 +130,27 @@ npx claude-sessions-cli
 
 Requires Node.js 18 or newer. Tested on macOS and Linux against Claude Code 2.x.
 
+### As a Claude Code plugin
+
+csm is also a plugin, which is the tidier way to get the half that lives inside
+Claude Code. The repository is its own marketplace, so it installs from here:
+
+```
+/plugin marketplace add soohunee/claude-session-manager
+/plugin install csm@claude-session-manager
+```
+
+That registers `/csm:persist` and the three hooks without writing to your
+`settings.json` at all, and `/plugin uninstall csm@claude-session-manager`
+takes them away again.
+
+It does not replace the install above. A plugin's executables go on the PATH of
+the Bash tool rather than your own shell, so the plugin gives Claude Code `csm`
+and gives you nothing to type: the picker, `csm search`, `csm derive` and the
+rest still need the npm install. Install both and everything works; `csm doctor`
+will then point out that the hooks are wired up twice and tell you which half to
+drop.
+
 ## Usage
 
 ```bash
@@ -166,6 +165,7 @@ csm search "rate limit"   # find the conversation where you discussed it
 csm ls --sort dir         # group the listing by working directory
 csm ls --dir --json       # this directory's sessions as JSON
 csm resume billing -- --model opus   # extra flags go straight to claude
+csm resume billing -- --dangerously-skip-permissions   # ...without being asked before each edit
 ```
 
 ### Commands
@@ -225,6 +225,7 @@ dim, and <kbd>?</kbd> explains every one of them in a sentence.
 | <kbd>Enter</kbd> | Resume the selected session |
 | <kbd>f</kbd> | Resume a copy: branch under a new id, leaving this one as it is |
 | <kbd>r</kbd> | Resume with Remote Control, to carry on from your phone |
+| <kbd>!</kbd> <kbd>Shift</kbd>+<kbd>Enter</kbd> | Resume it with `--dangerously-skip-permissions` |
 | <kbd>y</kbd> | Print the resume command and exit |
 | <kbd>n</kbd> | Derive a fresh session carrying a handoff from this one |
 | <kbd>d</kbd> | Remove its tags, and its archive with them (asks first) |
@@ -244,135 +245,31 @@ dim, and <kbd>?</kbd> explains every one of them in a sentence.
 | <kbd>?</kbd> | Show every key |
 | <kbd>Esc</kbd> <kbd>q</kbd> | Quit |
 
-Anything that removes something or spends money asks in a dialog over the list,
-with the session still in view. Pick a button with <kbd>←</kbd> <kbd>→</kbd> and
-run it with <kbd>Enter</kbd>; <kbd>Esc</kbd> backs out. The safe button starts
-selected, so the reflex to hit <kbd>Enter</kbd> is never the one that deletes an
-archive or starts a billed call.
+### Skipping permission prompts
 
-Letters act on the session under the cursor, which is why filtering lives behind
-<kbd>/</kbd>. An unrecognised key does nothing rather than falling through to the
-filter: a <kbd>d</kbd> that sometimes untagged and sometimes searched would be
-worse than either rule on its own.
+Claude Code asks before it edits a file or runs a command, and csm never turns
+that off on its own. When you do want a session resumed without it, press
+<kbd>!</kbd> on the row instead of <kbd>Enter</kbd>: it resumes that session, and
+only that one, with `--dangerously-skip-permissions`. Nothing is remembered
+afterwards, so the next <kbd>Enter</kbd> asks for permission as usual.
 
-### Tagging from inside Claude Code
+<kbd>Shift</kbd>+<kbd>Enter</kbd> does the same thing, if your terminal sends
+something for it that a program can tell apart from plain <kbd>Enter</kbd>.
+Most send a bare carriage return, which is indistinguishable, so <kbd>!</kbd> is
+the one that always works and the one the menu lists. Terminals that do work are
+those speaking the kitty keyboard protocol (kitty, Ghostty, WezTerm, recent
+iTerm2 and Alacritty), and any terminal configured to send an escape-prefixed
+return for it, which is what Claude Code's own `/terminal-setup` sets up in
+iTerm2 and VS Code.
 
-When a conversation turns into something you will want back, tag it without
-leaving the session:
-
-```
-/persist billing-refactor
-```
-
-Then, from anywhere:
+Outside the picker, pass the flag through yourself:
 
 ```bash
-csm -t billing-refactor
+csm resume billing -- --dangerously-skip-permissions
 ```
 
-A session can carry several tags, and tags may be written in any language.
-
-### Continuing a session that filled up
-
-When a conversation runs out of room, the usual move is to ask it for a summary,
-open a new session, and paste in the path to that summary. `csm derive` does the
-whole thing:
-
-```bash
-csm derive                    # from the session running in this directory
-csm derive 557dac2e           # or any session, matched on an id prefix
-csm derive --fast             # skip the model, build the handoff from the transcript
-csm derive --note "Start with the failing test."
-```
-
-Writing the handoff replays the whole parent conversation through the model in
-one API call, billed to your Claude account, so `derive` says what it is about
-to spend on and asks first. From the picker, <kbd>n</kbd> asks in a box over the
-list and waits there too — only the handover to Claude Code itself takes the
-screen, the same way k9s keeps its own UI until you shell into something. `--yes` skips the question. While it runs it reports
-which phase it is in — reading the conversation, the model reading it, writing
-the handoff — because loading a multi-megabyte transcript happens before the
-model is reached, and a silent run looks the same whether it is working or hung.
-
-The new session opens with the handoff already in its first message rather than
-a path to go and read, so it knows where things stand from the first token,
-with no tool call to make and nothing to approve. A handoff too large to carry
-that way is referenced by path instead.
-
-It forks the parent to write the handoff, so the parent transcript is left
-exactly as it was — the summary request never becomes part of the conversation
-you are trying to preserve. The handoff lands in `~/.claude/csm/handoff/`, the
-parent is archived so it outlives Claude Code's cleanup, and the new session
-opens already pointed at the document.
-
-Either way, shapes that are always a secret — npm tokens, GitHub and Anthropic
-keys, AWS access keys, private keys, JWTs — are cut out on the way into the
-handoff. A transcript records verbatim whatever was pasted into the
-conversation, and a handoff would put that in a second file and then into a
-fresh session's context. It is a net rather than a guarantee, and it does not
-touch the transcript itself, which is Claude Code's own file.
-
-`--fast` skips the model entirely and assembles the handoff from the transcript:
-what was asked, which files were touched, which commands ran. It is instant and
-free, but it records what happened rather than why. csm also falls back to it on
-its own if the parent's context is too full for a summary to come back.
-
-Because the link between the two is written down, the chain stays visible:
-
-```
-$ csm tree
-A 557dac2e 3h ago   412  Billing auth refactor            ~/work/api  #billing
-  0ddad746 1h ago   180  └ ↑ Billing auth refactor        ~/work/api
-    9c1f22ae 4m ago  22  ​  └ ↑ Billing auth refactor      ~/work/api
-```
-
-A derived session whose parent is filtered out of the view is listed at the top
-level rather than hidden, and `csm untag` and `csm prune` leave the archive of
-any session a tree hangs off alone — dropping it would strand the branches under
-a root that no longer exists.
-
-### What the list leaves out
-
-Two kinds of session are hidden until you ask for them, and the header says how
-many of each.
-
-Sessions whose transcript Claude Code has already deleted are listed only with
-<kbd>.</kbd> or `-a`; nothing is left to restore, so they are there to show you
-what was lost rather than to resume.
-
-Sessions Claude Code never named are hidden by <kbd>,</kbd>. It writes an
-`ai-title` once a session has a conversation in it, so the unnamed ones are what
-`/plugins`, `/login` or a stray keystroke left behind. This is Claude Code's own
-judgement rather than a threshold csm invented, and it separates cleanly: across
-94 sessions here, the named ones had a median of 198 messages and the unnamed a
-median of 2, with no named session under 7.
-
-Two things are never treated as unnamed: a session from the last hour, which has
-not been titled *yet* rather than never, and one csm derived from another, which
-carries csm's own label and a recorded parent.
-
-### How full a session is
-
-The `ctx` column is how much context the session was holding the last time the
-model answered in it: the whole prompt, cache hits included, which is what
-Claude Code sent. It falls back down after a compaction, which is the honest
-thing for it to do — the question it answers is "how much room is left", not
-"how big did this ever get".
-
-It is a token count and not a percentage, because csm does not know your context
-window. The size is not recorded in the transcript, is not in `settings.json`,
-and moves with the model and with `claude --autocompact`, whose own range is
-100k to 1M. Across 2,175 usage records here the largest single prompt was
-714,929 tokens, so any fixed denominator csm picked would already be wrong for
-somebody. Tell it yours and it will do the arithmetic:
-
-```bash
-csm --context-window 1m          # or 200k, or 500000
-export CSM_CONTEXT_WINDOW=1000000
-```
-
-With a window set the column shows a percentage, and goes amber past 70% and red
-past 90% — the sessions worth handing to a fresh one with <kbd>n</kbd>.
+Everything after `--` goes straight to `claude`, and asking for the flag both
+ways still passes it once.
 
 ## How it works
 
@@ -405,8 +302,8 @@ To keep untagged sessions around longer, raise `cleanupPeriodDays` in
 ## Notes and limits
 
 - Resuming runs `claude --resume <id>` with the session's original working
-  directory. If that directory has been deleted or moved, csm says so instead of
-  guessing.
+  directory, plus anything after `--`. If that directory has been deleted or
+  moved, csm says so instead of guessing.
 - Sessions marked `x` in `csm ls -a` are known only from prompt history. Nothing
   is left to restore; they are listed so you can see what was lost.
 - If `csm tag` reports "matched by recency", the hooks are not installed yet —

@@ -22,10 +22,10 @@ const { parseTranscript, scanSessions, sortSessions, isUnnamed } = await import(
 const { tailMessages } = await import('../src/preview.js');
 const { pick, layoutMenu, compactMenu, menuFor, shortPath, ACTIONS } = await import('../src/tui.js');
 const { searchTranscript, snippet } = await import('../src/search.js');
-const { parseArgs, selectSessions, buildDeriveArgs } = await import('../src/cli.js');
+const { parseArgs, selectSessions, buildDeriveArgs, withSkipPermissions } = await import('../src/cli.js');
 const { addTags, removeTags, loadTags, normalizeTag } = await import('../src/store.js');
 const { archiveSession, restoreSession, isArchived, archivePathFor } = await import('../src/archive.js');
-const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks } = await import('../src/install.js');
+const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks, pluginInstalled } = await import('../src/install.js');
 const { recordLink, removeLink, loadLinks, linkedIds, buildTree } = await import('../src/links.js');
 const { extractHandoff, frameHandoff, redact, writeHandoff, handoffPathFor } = await import('../src/handoff.js');
 
@@ -553,7 +553,7 @@ test('the menu answers what can be done with the highlighted session', () => {
   const live = menuFor({ resumable: true, file: 'x', cwd: CWD, tags: ['keep'], parent: 'p0' });
   const expired = menuFor({ resumable: false, cwd: CWD, tags: ['keep'], parent: 'p0' });
   const on = (menu, key) => menu.find((a) => a.key === key).enabled !== false;
-  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', 'y', 'n', 'd', 'a', 'c', 'u']);
+  assert.deepEqual(ACTIONS.filter((a) => a.needs).map((a) => a.key), ['enter', 'f', 'r', '!', 'y', 'n', 'd', 'a', 'c', 'u']);
 
   // A live, tagged session can take everything.
   for (const a of live) assert.notEqual(a.enabled, false, `${a.key} should be live`);
@@ -1026,4 +1026,63 @@ test('a handoff that cannot be read still produces a usable prompt', () => {
   assert.equal(inlined, false);
   assert.match(seed, /Read \/h\/gone\.md/);
   assert.ok(args.includes('--add-dir'));
+});
+
+test('the plugin is recognised however its marketplace names it', () => {
+  const file = path.join(root, 'plugins', 'installed_plugins.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  assert.equal(pluginInstalled(), null, 'nothing is installed before the file exists');
+
+  fs.writeFileSync(file, JSON.stringify({ version: 2, plugins: { 'claude-hud@claude-hud': [{}] } }));
+  assert.equal(pluginInstalled(), null, 'somebody else\'s plugin is not ours');
+
+  // The id is `<plugin>@<marketplace>`, and csm has no say in the right-hand
+  // half: the same plugin carries a different id depending on where it was
+  // installed from, so only the name is ours to match on.
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ version: 2, plugins: { 'claude-hud@claude-hud': [{}], 'csm@some-marketplace': [{}] } })
+  );
+  assert.equal(pluginInstalled(), 'csm@some-marketplace');
+
+  fs.writeFileSync(file, '{ not json');
+  assert.equal(pluginInstalled(), null, 'an unreadable file is not an install');
+
+  fs.rmSync(file);
+});
+
+test('skipping permissions is passed to claude once, however it was asked for', () => {
+  const FLAG = '--dangerously-skip-permissions';
+  assert.deepEqual(withSkipPermissions(['--model', 'opus'], false), ['--model', 'opus'], 'disarmed adds nothing');
+  assert.deepEqual(withSkipPermissions(['--model', 'opus'], true), ['--model', 'opus', FLAG]);
+  // Asked for on the command line and in the picker is still one flag.
+  assert.deepEqual(withSkipPermissions([FLAG], true), [FLAG]);
+});
+
+test('one key resumes a session with the permission prompts off', async () => {
+  const bang = await drivePicker([LIVE], [{ str: '!' }]);
+  assert.deepEqual([bang.result.session.id, bang.result.action], [LIVE.id, 'resume-skip']);
+
+  // Shift+enter, in the two encodings a terminal can be told apart by. Both are
+  // the same action, so nobody has to know which one their terminal sends.
+  const kitty = await drivePicker([LIVE], [{ code: '[13;2u' }]);
+  assert.equal(kitty.result.action, 'resume-skip');
+  const escPrefixed = await drivePicker([LIVE], [{ name: 'return', meta: true }]);
+  assert.equal(escPrefixed.result.action, 'resume-skip');
+
+  // A bare CR stays a plain resume. Most terminals send one for shift+enter,
+  // and a picker that guessed otherwise would quietly make every resume unsafe.
+  const plain = await drivePicker([LIVE], [{ name: 'return' }]);
+  assert.equal(plain.result.action, 'resume');
+
+  // Nothing to resume means nothing to skip prompts for, same as enter.
+  const dead = await drivePicker([EXPIRED], [{ str: '!' }], { expired: true });
+  assert.equal(dead.result, 'still-open');
+});
+
+test('! typed into the filter narrows the list instead of launching', async () => {
+  const typed = await drivePicker([LIVE], [{ str: '/' }, { str: '!' }]);
+  assert.equal(typed.result, 'still-open', 'filtering must not hand the terminal over');
+  assert.match(typed.screen, /\/!/);
 });

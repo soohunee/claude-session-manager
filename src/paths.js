@@ -10,6 +10,7 @@ export const projectsDir = () => path.join(claudeHome(), 'projects');
 export const historyFile = () => path.join(claudeHome(), 'history.jsonl');
 export const settingsFile = () => path.join(claudeHome(), 'settings.json');
 export const commandsDir = () => path.join(claudeHome(), 'commands');
+export const installedPluginsFile = () => path.join(claudeHome(), 'plugins', 'installed_plugins.json');
 
 /** Everything csm owns lives here, so uninstalling is `rm -rf`. */
 export const csmHome = () => path.join(claudeHome(), 'csm');

@@ -14,6 +14,7 @@ import {
   installCommand,
   uninstallCommand,
   commandInstalled,
+  pluginInstalled,
   hookStamp,
   hookEnd,
   resolveCurrentSession,
@@ -247,6 +248,20 @@ function resolveTarget(opts, query, sessions) {
 /** Single-quote a path for a shell command the user will paste back. */
 function shellQuote(value) {
   return `'` + String(value).replace(/'/g, `'\\''`) + `'`;
+}
+
+const SKIP_PERMISSIONS = '--dangerously-skip-permissions';
+
+/**
+ * Fold the picker's skip-permissions toggle into the flags bound for Claude Code.
+ *
+ * The toggle and `csm -- --dangerously-skip-permissions` are the same thing said
+ * two ways, so they meet here rather than in two argument builders, and asking
+ * for it both ways passes it once.
+ */
+export function withSkipPermissions(passthrough, on) {
+  if (!on || passthrough.includes(SKIP_PERMISSIONS)) return passthrough;
+  return [...passthrough, SKIP_PERMISSIONS];
 }
 
 /**
@@ -684,6 +699,8 @@ function cmdDoctor() {
     console.log(c.dim('    Re-run `csm init` to point it at the current one.'));
   }
   console.log(`  /persist        ${ok(commandInstalled())}`);
+  const plugin = pluginInstalled();
+  if (plugin) console.log(`  plugin          ${c.green(plugin)}`);
   console.log(`  this directory  ${current ? `${current.id.slice(0, 8)} ${c.dim('via ' + current.via)}` : c.dim('no session found')}`);
   console.log('');
   console.log(`  sessions        ${sessions.length} across ${plural(dirs.size, 'directory', 'directories')}`);
@@ -696,6 +713,14 @@ function cmdDoctor() {
   const links = loadLinks().links;
   const derived = Object.keys(links).length;
   console.log(`  derived         ${derived}${derived ? c.dim('  (see `csm tree`)') : ''}`);
+
+  if (plugin && hooksInstalled().length) {
+    console.log('');
+    console.log(c.yellow('  csm is wired up twice: once by `csm init`, once by the plugin.'));
+    console.log(c.dim('  Both carry the same hooks, so each one runs on every session. Nothing'));
+    console.log(c.dim('  breaks, but `csm uninstall` removes the `csm init` half and leaves the'));
+    console.log(c.dim('  plugin to do the work on its own.'));
+  }
 
   if (expired > 0) {
     console.log('');
@@ -830,9 +855,12 @@ async function cmdPick(opts, rest, passthrough) {
   }
   // Deriving is its own command rather than a way of resuming, so it does not
   // go through the mode below.
+  // `!` and shift+enter are resume with one flag added, so they resolve to a
+  // plain resume below and only the flag list tells them apart.
+  const flags = withSkipPermissions(passthrough, chosen.action === 'resume-skip');
   if (chosen.action === 'derive') {
     if (chosen.warning) console.log(c.yellow(`The model could not summarise it: ${chosen.warning}`) + c.dim(' — using the transcript instead.'));
-    return finishDerive(chosen.session, passthrough, {
+    return finishDerive(chosen.session, flags, {
       text: chosen.handoff?.text ?? null,
       cost: chosen.handoff?.cost ?? null,
       opts,
@@ -841,7 +869,7 @@ async function cmdPick(opts, rest, passthrough) {
   // A key pressed in the picker refines what the flags asked for: `r` and `f`
   // choose the mode, `y` only switches the result to a printed command.
   const mode = chosen.action === 'remote' || chosen.action === 'fork' ? chosen.action : opts.mode;
-  resume(chosen.session, passthrough, { mode, print: opts.print || chosen.action === 'print' });
+  resume(chosen.session, flags, { mode, print: opts.print || chosen.action === 'print' });
 }
 
 export async function main(argv) {

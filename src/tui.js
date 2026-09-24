@@ -72,6 +72,7 @@ export const ACTIONS = [
   { key: 'enter', label: 'Resume', needs: 'resumable', help: 'Carry on in this session; what you say next is added to it' },
   { key: 'f', label: 'Resume a copy', needs: 'resumable', help: 'Branch: continue under a new id, leaving this one exactly as it is' },
   { key: 'r', label: 'Remote control', needs: 'resumable', help: 'Resume with Remote Control, to carry on from your phone' },
+  { key: '!', label: 'Resume, no prompts', needs: 'resumable', help: 'Resume it with --dangerously-skip-permissions, so it never asks before editing or running anything; shift+enter does the same' },
   { key: 'y', label: 'Print cmd', needs: 'resumable', help: 'Print the command that would resume it, and quit' },
   { key: 'n', label: 'New from this', needs: 'resumable', help: 'Hand this session to a fresh one, for when it has filled up' },
   { key: 'd', label: 'Untag', needs: 'tagged', help: 'Remove its tags; the archived copy goes with the last one' },
@@ -719,6 +720,13 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       // sometimes searched and sometimes acted would be worse than either.
       const last = Math.max(0, filtered.length - 1);
       const page = Math.max(1, Math.floor(((out.rows || 24) - 8) / 2));
+      // Shift+enter, in the two forms a terminal can actually be told apart by:
+      // the kitty protocol's CSI-u encoding, and the esc-prefixed form iTerm2 and
+      // VS Code are usually configured to send. Most terminals send a bare CR for
+      // it, which is enter and nothing else, so `!` is bound to the same action
+      // and is the one the menu teaches.
+      const shiftEnter = key.code === '[13;2u' || (key.meta && (key.name === 'return' || key.name === 'enter'));
+      if (str === '!' || shiftEnter) return act('resume-skip', '!');
       if (key.name === 'escape' || key.name === 'q') return done(null);
       if (key.name === 'return' || key.name === 'enter') return act('resume', 'enter');
       if (key.name === 'f') return act('fork', 'f');
