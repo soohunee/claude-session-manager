@@ -282,9 +282,10 @@ Everything comes from files Claude Code already writes:
 | `~/.claude/csm/` | Tags, session lineage, handoff documents, archived transcripts, metadata cache — everything csm owns |
 
 Claude Code writes an `ai-title` record into each transcript, so the titles in
-the picker are its own rather than something csm generates. Session metadata is
-cached by modification time and size, so repeat runs read almost nothing: a cold
-scan of 78 sessions takes about 95 ms.
+the picker are its own rather than something csm generates. A name you give a
+session with `/rename` is written there too, and wins over the generated one.
+Session metadata is cached by modification time and size, so repeat runs read
+almost nothing: a cold scan of 78 sessions takes about 95 ms.
 
 Uninstalling is `csm uninstall` followed by `rm -rf ~/.claude/csm`. Nothing else
 on disk is modified, and csm never writes to Claude Code's own transcripts.

@@ -1086,3 +1086,11 @@ test('! typed into the filter narrows the list instead of launching', async () =
   assert.equal(typed.result, 'still-open', 'filtering must not hand the terminal over');
   assert.match(typed.screen, /\/!/);
 });
+
+test('a name given with /rename beats the title Claude Code wrote', () => {
+  const file = writeTranscript('renamed-0000', [
+    { type: 'custom-title', customTitle: 'My name', sessionId: 'renamed-0000' },
+    ...fixtureLines('Model title', 'hello'),
+  ]);
+  assert.equal(parseTranscript(file).title, 'My name');
+});

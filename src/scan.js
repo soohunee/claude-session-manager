@@ -4,7 +4,7 @@ import { projectsDir, historyFile, archiveDir, indexFile } from './paths.js';
 import { readJson, writeJson, loadTags } from './store.js';
 import { loadLinks } from './links.js';
 
-const INDEX_VERSION = 3;
+const INDEX_VERSION = 4;
 
 /** Pull readable text out of a message record's `content` (string or block array). */
 export function textOf(message) {
@@ -45,9 +45,17 @@ export function parseTranscript(file) {
     model: null,
   };
 
+  // A name given with /rename beats Claude Code's own title, whichever of the
+  // two was written last.
+  let customTitle = null;
   for (const line of raw.split('\n')) {
     if (line.length < 2) continue;
 
+    if (line.includes('"custom-title"')) {
+      const d = tryParse(line);
+      if (d?.customTitle) customTitle = d.customTitle;
+      continue;
+    }
     if (line.includes('"ai-title"')) {
       const d = tryParse(line);
       if (d?.aiTitle) meta.title = d.aiTitle;
@@ -99,6 +107,7 @@ export function parseTranscript(file) {
       }
     }
   }
+  if (customTitle) meta.title = customTitle;
   return meta;
 }
 
