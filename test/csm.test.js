@@ -28,6 +28,7 @@ const { archiveSession, restoreSession, isArchived, archivePathFor } = await imp
 const { installHooks, uninstallHooks, hooksInstalled, hookEnd, staleHooks, pluginInstalled } = await import('../src/install.js');
 const { recordLink, removeLink, loadLinks, linkedIds, buildTree } = await import('../src/links.js');
 const { extractHandoff, frameHandoff, redact, writeHandoff, handoffPathFor } = await import('../src/handoff.js');
+const { matchPanes } = await import('../src/tmux.js');
 
 const CWD = '/tmp/csm-fixture-project';
 
@@ -1093,4 +1094,34 @@ test('a name given with /rename beats the title Claude Code wrote', () => {
     ...fixtureLines('Model title', 'hello'),
   ]);
   assert.equal(parseTranscript(file).title, 'My name');
+});
+
+test('a running session is found in the tmux pane its process descends from', () => {
+  const running = [
+    { pid: 300, sessionId: 'nested', status: 'busy' },
+    { pid: 400, sessionId: 'direct', status: 'idle' },
+    { pid: 999, sessionId: 'exited', status: 'idle' },
+  ];
+  // 300 runs under a wrapper (200) in pane %1's shell (100); 400 is pane %2's
+  // own process; 999 is a stale file whose process has gone.
+  const panes = '100 %1 work\n400 %2 two words\n';
+  const ps = '  100     1\n  200   100\n  300   200\n  400     1\n';
+  const found = matchPanes(running, panes, ps);
+  assert.deepEqual(found.get('nested'), { pane: '%1', name: 'work', status: 'busy' });
+  assert.deepEqual(found.get('direct'), { pane: '%2', name: 'two words', status: 'idle' });
+  assert.equal(found.has('exited'), false);
+});
+
+test('a session open in tmux is gone to rather than resumed again', () => {
+  const menu = menuFor({ ...LIVE, tmux: { pane: '%1', name: '4', status: 'idle' } });
+  assert.equal(menu.find((a) => a.key === 'enter').label, 'Go to tmux');
+  assert.equal(menuFor(LIVE).find((a) => a.key === 'enter').label, 'Resume');
+});
+
+test('l narrows the picker to sessions open in tmux and names the pane', async () => {
+  const open = { ...LIVE, id: 'open', label: 'In a pane', tmux: { pane: '%1', name: 'work', status: 'busy' } };
+  const closed = { ...LIVE, id: 'closed', label: 'Not open', updatedAt: '2025-12-31T00:00:00.000Z' };
+  const { screen } = await drivePicker([open, closed], [{ name: 'l' }]);
+  assert.match(screen, /work \u25cf .*In a pane/);
+  assert.equal(screen.includes('Not open'), false);
 });

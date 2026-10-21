@@ -86,6 +86,9 @@ disappearing, so there is nothing to look up.
   start. The flags remain, for scripts.
 - **Resume however you need.** In place, as a fork that leaves the original
   untouched, or with Remote Control so you can carry on from your phone.
+- **Which tmux session is which.** `csm tmux` lists the sessions open in tmux
+  right now, names the tmux session each is in and marks the ones that are
+  working. Enter goes to that pane rather than opening the conversation twice.
 - **Zero dependencies.** No network calls, no API keys; it only reads files
   Claude Code already writes.
 - **Scriptable.** `--json` on every listing command, `--print-cmd` to get the
@@ -162,6 +165,7 @@ csm resume billing --remote          # ...with Remote Control, to continue on mo
 csm resume billing --fork            # ...into a new session, leaving the original
 csm resume billing --print-cmd       # print the command instead of running it
 csm search "rate limit"   # find the conversation where you discussed it
+csm tmux                  # which tmux session holds which conversation; Enter goes there
 csm ls --sort dir         # group the listing by working directory
 csm ls --dir --json       # this directory's sessions as JSON
 csm resume billing -- --model opus   # extra flags go straight to claude
@@ -178,6 +182,7 @@ csm resume billing -- --dangerously-skip-permissions   # ...without being asked 
 | `csm search <text>` | Search what was said, across every session |
 | `csm derive [id\|query]` | Start a fresh session carrying a handoff from this one |
 | `csm tree [query]` | Show sessions as the tree of what was derived from what |
+| `csm tmux [query]` | The picker over sessions open in tmux; Enter goes to the pane |
 | `csm tag <tag...>` | Tag the session in this directory and archive it |
 | `csm untag <tag...>` | Remove tags (omit tags to clear the session) |
 | `csm tags` | List every tag with its session count |
@@ -222,7 +227,7 @@ dim, and <kbd>?</kbd> explains every one of them in a sentence.
 
 | Key | Action |
 | --- | --- |
-| <kbd>Enter</kbd> | Resume the selected session |
+| <kbd>Enter</kbd> | Resume the selected session, or go to its pane if it is open in tmux |
 | <kbd>f</kbd> | Resume a copy: branch under a new id, leaving this one as it is |
 | <kbd>r</kbd> | Resume with Remote Control, to carry on from your phone |
 | <kbd>!</kbd> <kbd>Shift</kbd>+<kbd>Enter</kbd> | Resume it with `--dangerously-skip-permissions` |
@@ -236,6 +241,7 @@ dim, and <kbd>?</kbd> explains every one of them in a sentence.
 | <kbd>.</kbd> | Show expired sessions |
 | <kbd>,</kbd> | Show unnamed sessions — what running a slash command left behind |
 | <kbd>c</kbd> | Narrow to the selected session's directory |
+| <kbd>l</kbd> | Only sessions open in a tmux pane right now |
 | <kbd>g</kbd> | Nest derived sessions under the ones they came from |
 | <kbd>u</kbd> | Go to the parent of the selected session |
 | <kbd>p</kbd> | Toggle the preview panel |
@@ -271,6 +277,37 @@ csm resume billing -- --dangerously-skip-permissions
 Everything after `--` goes straight to `claude`, and asking for the flag both
 ways still passes it once.
 
+### Sessions open in tmux
+
+Keep a dozen Claude Code sessions running in tmux and `tmux ls` stops helping:
+it lists `1`, `2`, `3`, and the only way to learn what each one holds is to
+attach to it. `csm tmux` opens the picker on just those sessions, with a column
+naming the tmux session each one is in:
+
+```
+  tmux      when     msgs ctx   title
+> 3 ●       just now 212  148k  Retry failed invoice webhooks
+  1         2h ago   64   71k   Upgrade the ingress controller
+  7         1d ago   389  402k  Billing dashboard redesign
+```
+
+`●` marks a session Claude Code is working in at that moment. <kbd>Enter</kbd>
+switches to its pane, or attaches to it when you run csm outside tmux. It never
+resumes the conversation a second time, which would put two Claude Code
+processes on one transcript, and the same goes for the main picker: Enter on any
+session that is open in tmux goes to its pane, and <kbd>l</kbd> narrows the list
+to those sessions.
+
+Bound to a key, it opens over whatever you are doing:
+
+```tmux
+# ~/.tmux.conf
+bind-key C-s display-popup -E -w 90% -h 80% "csm tmux"
+```
+
+<kbd>prefix</kbd> then <kbd>Ctrl</kbd>+<kbd>s</kbd> brings the list up; picking a
+session closes the popup and switches to it.
+
 ## How it works
 
 Everything comes from files Claude Code already writes:
@@ -279,6 +316,7 @@ Everything comes from files Claude Code already writes:
 | --- | --- |
 | `~/.claude/projects/<dir>/<session>.jsonl` | Title, working directory, git branch, message count, timestamps |
 | `~/.claude/history.jsonl` | The global, cross-directory list of session ids |
+| `~/.claude/sessions/<pid>.json` | Which sessions are running and whether each is working; `tmux list-panes` and `ps` then give the pane |
 | `~/.claude/csm/` | Tags, session lineage, handoff documents, archived transcripts, metadata cache — everything csm owns |
 
 Claude Code writes an `ai-title` record into each transcript, so the titles in

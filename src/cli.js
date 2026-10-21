@@ -23,6 +23,7 @@ import { recordLink, removeLink, loadLinks, linkedIds, buildTree } from './links
 import { extractHandoff, summarizeHandoff, frameHandoff, writeHandoff } from './handoff.js';
 import { claudeHome, projectsDir, settingsFile, handoffDir } from './paths.js';
 import { pick } from './tui.js';
+import { tmuxSessions } from './tmux.js';
 import { searchTranscript, snippet } from './search.js';
 import { c, pad, truncate, relTime, plural, humanBytes, humanTokens, spinner, confirm } from './format.js';
 
@@ -41,6 +42,7 @@ ${c.bold('USAGE')}
   csm search <text>           Search what was actually said, across every session
   csm derive [id|query]       Start a fresh session carrying a handoff from this one
   csm tree [query]            Show sessions as the tree of what was derived from what
+  csm tmux [query]            The picker over sessions open in tmux; enter goes to the pane
   csm tag <tag...>            Tag the session in this directory and archive it
   csm untag <tag...>          Remove tags (omit tags to clear the session)
   csm tags                    List every tag with its session count
@@ -81,7 +83,8 @@ ${c.bold('PICKER KEYS')}
   all. Bare letters act on the session; ${c.cyan('/')} starts filtering.
 
   Everything the flags above do while browsing has a key: ${c.cyan('t')} tag filter,
-  ${c.cyan('.')} expired, ${c.cyan('c')} this directory, ${c.cyan('s')} sort, ${c.cyan('g')} tree, ${c.cyan('n')} derive, ${c.cyan('d')} untag.
+  ${c.cyan('.')} expired, ${c.cyan('c')} this directory, ${c.cyan('s')} sort, ${c.cyan('g')} tree, ${c.cyan('n')} derive, ${c.cyan('d')} untag,
+  ${c.cyan('l')} open in tmux.
 
 ${c.bold('EXAMPLES')}
   csm                         Browse everything, fuzzy-search, hit enter to resume
@@ -93,6 +96,7 @@ ${c.bold('EXAMPLES')}
   csm ls --dir --json         Sessions for this directory as JSON
   csm derive                  Hand this session's context to a fresh one and open it
   csm tree                    See which sessions grew out of which
+  csm tmux                    Which tmux session is which conversation, and go to one
 
 Inside Claude Code, ${c.cyan('/persist <tag>')} tags the running session.
 `;
@@ -174,6 +178,8 @@ export function selectSessions(opts, query) {
   }
   sessions = sortSessions(sessions, opts.sort);
   if (opts.limit) sessions = sessions.slice(0, opts.limit);
+  const panes = tmuxSessions();
+  for (const s of sessions) s.tmux = panes.get(s.id) || null;
   return sessions;
 }
 
@@ -204,7 +210,7 @@ function printList(sessions, window = null) {
       )}${c.dim(pad(window ? contextPct(s, window) : humanTokens(s.contextTokens), 6))}${pad(
         treePrefix(s.depth || 0) + s.label,
         44
-      )} ${c.blue(truncate(homeShort(s.cwd), 34))} ${tags}`
+      )} ${c.blue(truncate(homeShort(s.cwd), 34))} ${tags}${s.tmux ? ' ' + c.green('tmux ' + s.tmux.name) : ''}`
     );
   }
 }
@@ -273,6 +279,7 @@ export function withSkipPermissions(passthrough, on) {
  * the command that would have run and exits.
  */
 function resume(session, passthrough, { mode = 'resume', print = false } = {}) {
+  if (session.tmux && mode === 'resume' && !print) return goToPane(session);
   if (!session.cwd) {
     console.error(c.red('This session has no recorded working directory; cannot resume.'));
     process.exit(1);
@@ -321,6 +328,21 @@ function resume(session, passthrough, { mode = 'resume', print = false } = {}) {
     if (signal) process.kill(process.pid, signal);
     else process.exit(code ?? 0);
   });
+}
+
+/**
+ * Go to the tmux pane a session is already open in.
+ *
+ * Resuming it again would put a second Claude Code on the same transcript, so
+ * a session that is open in tmux is visited instead of reopened. Inside tmux,
+ * a popup included, that switches this client; outside, it attaches.
+ */
+function goToPane(session) {
+  const { pane, name } = session.tmux;
+  const args = process.env.TMUX ? ['switch-client', '-t', pane] : ['attach-session', '-t', pane];
+  console.log(c.dim(`→ already open in tmux ${name}  ${c.bold(session.label)}`));
+  const child = spawn('tmux', args, { stdio: 'inherit' });
+  child.on('exit', (code) => process.exit(code ?? 0));
 }
 
 function cmdTag(opts, rest) {
@@ -790,7 +812,9 @@ async function cmdPick(opts, rest, passthrough) {
   // pool it gets must still contain everything they can bring back. Applying
   // them here would leave a key that can hide but never restore.
   const pool = selectSessions({ ...opts, all: true, unnamed: true, tagged: false, dir: null }, null);
-  const sessions = pool;
+  // Printed or piped, `csm tmux` is a list of what is open. The picker still
+  // gets the whole pool, so `l` can let the rest back in.
+  const sessions = opts.inTmux ? pool.filter((s) => s.tmux) : pool;
   // Count against everything on disk, not the filtered view, so the header
   // never claims there are no expired sessions when it simply hid them.
   const total = scanSessions();
@@ -800,7 +824,7 @@ async function cmdPick(opts, rest, passthrough) {
     return;
   }
   if (!sessions.length) {
-    console.log(c.dim('No sessions found. Have you used Claude Code in this account yet?'));
+    console.log(c.dim(opts.inTmux ? 'No Claude Code session is open in a tmux pane.' : 'No sessions found. Have you used Claude Code in this account yet?'));
     return;
   }
   // Only what narrows the view goes in the header; naming the tool twice would
@@ -847,6 +871,7 @@ async function cmdPick(opts, rest, passthrough) {
     unnamed: opts.unnamed,
     contextWindow: opts.contextWindow || Number(process.env.CSM_CONTEXT_WINDOW) || null,
     dir: opts.dir,
+    inTmux: opts.inTmux,
     tag: opts.tags.length === 1 ? opts.tags[0] : opts.tagged ? '*' : null,
   });
   if (!chosen) {
@@ -932,6 +957,8 @@ export async function main(argv) {
     }
     case 'all':
       return cmdPick(opts, rest.slice(1), passthrough);
+    case 'tmux':
+      return cmdPick({ ...opts, inTmux: true }, rest.slice(1), passthrough);
     default:
       return cmdPick(opts, rest, passthrough);
   }

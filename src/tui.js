@@ -69,7 +69,7 @@ function searchable(s) {
  * overlay, and a key that is not in it does nothing.
  */
 export const ACTIONS = [
-  { key: 'enter', label: 'Resume', needs: 'resumable', help: 'Carry on in this session; what you say next is added to it' },
+  { key: 'enter', label: 'Resume', needs: 'resumable', help: 'Carry on in this session; one already open in tmux is switched to instead' },
   { key: 'f', label: 'Resume a copy', needs: 'resumable', help: 'Branch: continue under a new id, leaving this one exactly as it is' },
   { key: 'r', label: 'Remote control', needs: 'resumable', help: 'Resume with Remote Control, to carry on from your phone' },
   { key: '!', label: 'Resume, no prompts', needs: 'resumable', help: 'Resume it with --dangerously-skip-permissions, so it never asks before editing or running anything; shift+enter does the same' },
@@ -83,6 +83,7 @@ export const ACTIONS = [
   { key: '.', label: 'Show expired', help: 'Include sessions Claude Code has already deleted the transcript of' },
   { key: ',', label: 'Show unnamed', help: 'Include what running a slash command left behind, which Claude Code never named' },
   { key: 'c', label: 'This dir only', needs: 'cwd', help: "Narrow to the selected session's directory, and back again" },
+  { key: 'l', label: 'Open in tmux', help: 'Only sessions open in a tmux pane right now, and which pane each is in' },
   { key: 'g', label: 'Tree', help: 'Nest sessions under the ones they were derived from' },
   { key: 'u', label: 'Go to parent', needs: 'parent', help: 'Move to the session this one was derived from' },
   { key: 'p', label: 'Preview', help: 'Show the tail of the conversation under the list' },
@@ -101,6 +102,9 @@ export const ACTIONS = [
  */
 export function menuFor(session) {
   return ACTIONS.map((a) => {
+    // Enter on a session that is already open goes to its pane, and the menu
+    // says so rather than promising a resume that will not happen.
+    if (a.key === 'enter' && session?.tmux) return { ...a, label: 'Go to tmux', enabled: true };
     if (!a.needs) return a;
     const enabled =
       a.needs === 'resumable'
@@ -193,6 +197,14 @@ function tagWidth(page, cols) {
   return Math.min(widest, Math.max(0, Math.floor(cols * 0.2)));
 }
 
+const tmuxText = (s) => (s.tmux ? truncate(s.tmux.name, 12) + (s.tmux.status === 'busy' ? ' \u25cf' : '') : '');
+
+/** The tmux column, as wide as the page needs, and gone when nothing is open. */
+function tmuxWidth(page) {
+  const widest = page.reduce((n, s) => Math.max(n, width(tmuxText(s))), 0);
+  return widest ? Math.max(widest, 4) + 2 : 0;
+}
+
 /**
  * One set of column widths for the header and every row.
  *
@@ -200,12 +212,12 @@ function tagWidth(page, cols) {
  * needed them; a header that works out its own widths is a header that drifts
  * out of line with the thing it labels.
  */
-function columns(cols, tagCol) {
+function columns(cols, tagCol, muxCol = 0) {
   const time = 9;
   const msgs = 5;
   const ctx = 6;
   const cwd = Math.max(12, Math.min(30, Math.floor(cols * 0.28)));
-  return { time, msgs, ctx, cwd, title: Math.max(10, cols - time - msgs - ctx - cwd - tagCol - 6) };
+  return { time, msgs, ctx, cwd, title: Math.max(10, cols - muxCol - time - msgs - ctx - cwd - tagCol - 6) };
 }
 
 /**
@@ -227,14 +239,14 @@ function contextCell(s, window) {
 }
 
 /** The column labels. `msgs` is the one nobody can guess from the numbers. */
-function renderHeader(cols, tagCol, window) {
-  const w = columns(cols, tagCol);
-  const line = `  ${pad('when', w.time)}${pad('msgs', w.msgs)}${pad(window ? 'ctx%' : 'ctx', w.ctx)}${pad('title', w.title)} ${pad('directory', w.cwd)}${pad(tagCol ? ' tags' : '', tagCol)}`;
+function renderHeader(cols, tagCol, window, muxCol = 0) {
+  const w = columns(cols, tagCol, muxCol);
+  const line = `  ${pad(muxCol ? 'tmux' : '', muxCol)}${pad('when', w.time)}${pad('msgs', w.msgs)}${pad(window ? 'ctx%' : 'ctx', w.ctx)}${pad('title', w.title)} ${pad('directory', w.cwd)}${pad(tagCol ? ' tags' : '', tagCol)}`;
   return c.dim(line);
 }
 
-function renderRow(s, cols, selected, tagCol, repeated = false, window = null) {
-  const { time: timeCol, msgs: msgCol, ctx: ctxCol, cwd: cwdCol, title: titleCol } = columns(cols, tagCol);
+function renderRow(s, cols, selected, tagCol, repeated = false, window = null, muxCol = 0) {
+  const { time: timeCol, msgs: msgCol, ctx: ctxCol, cwd: cwdCol, title: titleCol } = columns(cols, tagCol, muxCol);
   const tagText = tagsOf(s);
 
   const marker = selected ? '>' : ' ';
@@ -246,12 +258,14 @@ function renderRow(s, cols, selected, tagCol, repeated = false, window = null) {
   // it, the column starts carrying information again.
   const cwd = pad(repeated ? '' : shortPath(s.cwd, cwdCol), cwdCol);
   const tag = pad(tagText, tagCol);
+  const mux = pad(tmuxText(s), muxCol);
+  const muxColour = s.tmux?.status === 'busy' ? c.yellow : c.green;
 
   const ctxText = s.contextTokens ? (window ? Math.round((s.contextTokens / window) * 100) + '%' : humanTokens(s.contextTokens)) : '-';
-  const body = `${marker} ${time}${msgs}${pad(ctxText, ctxCol)}${title} ${cwd}${tag}`;
+  const body = `${marker} ${mux}${time}${msgs}${pad(ctxText, ctxCol)}${title} ${cwd}${tag}`;
   if (selected) return c.inverse(pad(body, cols - 1));
   if (!s.resumable) return c.dim(body);
-  return `${marker} ${c.dim(time)}${c.dim(msgs)}${contextCell(s, window)}${title} ${c.blue(cwd)}${c.magenta(tag)}`;
+  return `${marker} ${muxColour(mux)}${c.dim(time)}${c.dim(msgs)}${contextCell(s, window)}${title} ${c.blue(cwd)}${c.magenta(tag)}`;
 }
 
 function absTime(ts) {
@@ -273,6 +287,7 @@ function renderPreview(s, cols, height, cache) {
   if (!s) return lines;
 
   const meta = [
+    s.tmux ? `tmux ${s.tmux.name}${s.tmux.status ? ' ' + s.tmux.status : ''} ·` : '',
     `${absTime(s.updatedAt)} · ${s.messages || 0} messages`,
     s.contextTokens ? `· ${s.contextTokens.toLocaleString()} tokens of context` : '',
     s.model ? `· ${s.model}` : '',
@@ -396,7 +411,7 @@ function helpOverlay(cols, rows) {
  * line that truncated on a narrow terminal, so the features a new user most
  * needed pointing out were the first to disappear.
  */
-export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, unnamed = false, dir = null, tag: taggedOnly = null, tree = false, contextWindow = null, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
+export function pick(sessions, { actions = {}, scope = '', subtitle = '', expired = false, unnamed = false, dir = null, tag: taggedOnly = null, tree = false, contextWindow = null, inTmux = false, query: initialQuery = '', preview: previewOn = false, sort: sortMode = 'time', version = '' } = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -414,6 +429,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
     // Narrowing to a directory is a toggle rather than a flag, so it has to
     // remember which directory it was narrowed to.
     let onlyDir = dir;
+    let onlyTmux = inTmux;
     let sort = sortMode;
     let mode = 'normal';
     let overlay = null;
@@ -454,6 +470,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       if (tag === '*') list = list.filter((s) => (s.tags || []).length > 0);
       else if (tag) list = list.filter((s) => (s.tags || []).includes(tag));
       if (onlyDir) list = list.filter((s) => s.cwd === onlyDir);
+      if (onlyTmux) list = list.filter((s) => s.tmux);
       list = query ? list.filter((s) => fuzzy(searchable(s), query)) : list;
       // Nesting comes last so it only ever arranges what survived the filters,
       // and a child whose parent was filtered out is promoted rather than lost.
@@ -557,6 +574,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
           (tagCycle[tagAt] === '*' ? ' ' + c.magenta('tagged') : tagCycle[tagAt] ? ' ' + c.magenta('#' + tagCycle[tagAt]) : '') +
           (showExpired ? ' ' + c.magenta('expired') : '') +
           (onlyDir ? ' ' + c.magenta(homeShort(onlyDir)) : '') +
+          (onlyTmux ? ' ' + c.magenta('in tmux') : '') +
           (showTree ? ' ' + c.magenta('tree') : ''),
         mode === 'filter'
           ? c.cyan('/') + query + c.inverse(' ')
@@ -606,13 +624,14 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       const rule = c.dim('─'.repeat(Math.min(cols - 1, 100)));
       const page = filtered.slice(offset, offset + listHeight);
       const tagCol = tagWidth(page, cols);
-      const lines = [...head, rule, renderHeader(cols, tagCol, contextWindow)];
+      const muxCol = tmuxWidth(page);
+      const lines = [...head, rule, renderHeader(cols, tagCol, contextWindow, muxCol)];
       for (let i = 0; i < listHeight; i++) {
         const s = page[i];
         // The first row of a page always prints its directory, so scrolling
         // never leaves the column blank with nothing above it to inherit from.
         const repeated = i > 0 && page[i - 1] && page[i - 1].cwd === s?.cwd;
-        lines.push(s ? renderRow(s, cols, offset + i === cursor, tagCol, repeated, contextWindow) : '');
+        lines.push(s ? renderRow(s, cols, offset + i === cursor, tagCol, repeated, contextWindow, muxCol) : '');
       }
       lines.push(rule);
 
@@ -766,6 +785,7 @@ export function pick(sessions, { actions = {}, scope = '', subtitle = '', expire
       else if (str === '.') keepingCursor(() => (showExpired = !showExpired));
       else if (str === ',') keepingCursor(() => (showUnnamed = !showUnnamed));
       else if (key.name === 'g' && !key.shift && !key.ctrl) keepingCursor(() => (showTree = !showTree));
+      else if (key.name === 'l' && !key.ctrl) keepingCursor(() => (onlyTmux = !onlyTmux));
       else if (key.name === 'u' && !key.ctrl) {
         const parent = filtered[cursor]?.parent;
         const at = parent ? filtered.findIndex((x) => x.id === parent) : -1;
